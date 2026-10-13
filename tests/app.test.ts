@@ -319,7 +319,8 @@ describe("heritage app", () => {
     expect(home).toContain('id="settingsMenu"');
     expect(home).toContain('id="setPhotos"');
     expect(home).toContain('id="setYears"');
-    expect(home).toContain('id="setDefaultView"');
+    expect(home).not.toContain("tree-view-tabs");
+    expect(home).not.toContain('id="zoomReset"');
   });
 
   test("viewer page degrades to person links without JS", async () => {

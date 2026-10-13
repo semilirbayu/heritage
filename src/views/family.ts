@@ -482,10 +482,12 @@ function layoutFamilyView(
     if (id !== rootId && gen.has(id) && positioned.has(id)) placeAncestors(id);
   }
 
-  // Shift a whole collateral block right until every row it touches is
-  // clear. Internal centering (couple over kids) survives the move, so
-  // cousin branches read exactly like the main branch, just placed aside.
-  function shiftBlock(members: string[]): void {
+  // Shift a whole collateral block until every row it touches is clear on
+  // the chosen side. Internal centering (couple over kids) survives the
+  // move, so cousin branches read exactly like the main branch, just
+  // placed aside. Parking blocks on BOTH sides keeps the blood line in the
+  // middle of the layout instead of pinning it to the left edge.
+  function shiftBlock(members: string[], dir: number): void {
     let shift = 0;
     for (let iter = 0; iter < 12; iter++) {
       let need = shift;
@@ -497,12 +499,15 @@ function layoutFamilyView(
         for (;;) {
           let next = x;
           for (const y of row) {
-            if (Math.abs(next - y) < NODE_W + X_GAP) next = Math.max(next, y + STEP_X);
+            if (Math.abs(next - y) >= NODE_W + X_GAP) continue;
+            next = dir > 0 ? Math.max(next, y + STEP_X) : Math.min(next, y - STEP_X);
           }
           if (next === x) break;
           x = next;
         }
-        need = Math.max(need, x - rel.get(m)!);
+        const delta = x - rel.get(m)!;
+        if (dir > 0) need = Math.max(need, delta);
+        else need = Math.min(need, delta);
       }
       if (need === shift) break;
       shift = need;
@@ -591,13 +596,21 @@ function layoutFamilyView(
   // (and root siblings) that have children in scope get their own tidy
   // descendant block — couple centered over cousins, cousins' couples
   // over their kids. shiftBlock keeps their internal centering intact.
+  // Blocks alternate to the lighter side by accumulated width, so a tree
+  // full of cousin branches spreads around the blood line instead of
+  // piling everything to the right of it.
+  let parkedRight = 0;
+  let parkedLeft = 0;
   for (const id of siblingAdded) {
     const g = gen.get(id);
     if (g === undefined || positioned.has(id)) continue;
     if (g >= 0 && siblingAnchor.get(id) !== rootId) continue;
     if (!hasScopedKids(id)) continue;
-    const { members } = descBlock(id);
-    shiftBlock(members);
+    const { members, width } = descBlock(id);
+    const dir = parkedRight <= parkedLeft ? 1 : -1;
+    shiftBlock(members, dir);
+    if (dir > 0) parkedRight += width;
+    else parkedLeft += width;
   }
 
   let minX = Infinity;
@@ -630,9 +643,10 @@ function layoutFamilyView(
   const nodes: LayoutNode[] = [];
   let width = 1;
   let height = 1;
-  // Ancestors hidden above each card (for the ↑ count pill): walk the whole
-  // tree upward and count whoever is not placed. Shared with the main line
-  // or depth-capped — anything unplaced counts.
+  // Ancestors hidden above each card (for the ↑ count pill): walk upward
+  // through whoever is not placed. The walk stops at the first placed
+  // ancestor — that card owns its own affordance, so only the person at the
+  // top of a collapsed line carries the pill (not everyone below it).
   const countHiddenAncestors = (id: string): number => {
     const seen = new Set<string>([id]);
     const stack = [id];
@@ -643,7 +657,8 @@ function layoutFamilyView(
         for (const q of f.partners) {
           if (seen.has(q)) continue;
           seen.add(q);
-          if (!positioned.has(q)) count++;
+          if (positioned.has(q)) continue;
+          count++;
           stack.push(q);
         }
       }
