@@ -1,0 +1,27 @@
+0 HEAD
+1 SOUR HERITAGE
+2 VERS 0.1.0
+2 NAME Heritage fixture
+1 GEDC
+2 VERS 5.5.1
+2 FORM LINEAGE-LINKED
+1 CHAR UTF-8
+1 SUBM @U1@
+0 @U1@ SUBM
+1 NAME Heritage Test
+0 @I1@ INDI
+1 NAME Anne /Lovelace/
+2 GIVN Anne
+2 SURN Lovelace
+1 SEX F
+1 FAMS @F1@
+0 @I2@ INDI
+1 NAME Ada /Lovelace/
+2 GIVN Ada
+2 SURN Lovelace
+1 SEX F
+1 FAMC @F1@
+0 @F1@ FAM
+1 WIFE @I1@
+1 CHIL @I2@
+0 TRLR
