@@ -25,15 +25,19 @@ import {
   BUILD_ID,
   exportPage,
   familyPage,
+  fileHealthPage,
   importPage,
   listPage,
   newPersonPage,
   notFound,
   personPage,
 } from "./pages";
-import { familyLayout, type TreeViewMode, wrapDisplayName } from "../views/family";
+import { familyLayout, type FamilyLayout, type TreeViewMode, wrapDisplayName } from "../views/family";
+import { outlineFromLayout } from "../views/outline";
 import { kinOf, preferredEvent, preferredName } from "../domain/tree";
 import { yearOf } from "../views/list";
+import { VIEWER_JS } from "./viewerScript";
+import { SESSION_SCRIPT } from "./session";
 
 export interface AppStore {
   tree: Tree;
@@ -137,7 +141,47 @@ function personSummary(tree: Tree, p: Person): Record<string, unknown> {
   };
 }
 
+/** One layout run from shared URL params — the tree and outline endpoints. */
+function layoutFromUrl(store: AppStore, url: URL): { root: string; layout: FamilyLayout } {
+  const root = url.searchParams.get("root") ?? store.tree.persons[0]!.id;
+  const view = parseView(url);
+  const layout = familyLayout(store.tree, root, {
+    ...parseDepth(url, view),
+    collapsedFamilyIds: parseIdSet(url, "collapsed"),
+    expandedAncestorIds: parseIdSet(url, "expand"),
+    minimizedAncestorIds: parseIdSet(url, "min"),
+    showSiblings: parseSiblings(url),
+    siblingPersonIds: parseIdSet(url, "siblingsOf"),
+    showYears: parseFlag(url, "years", true),
+    showPhotos: parseFlag(url, "photos", false),
+    view,
+  });
+  return { root, layout };
+}
+
 async function route(store: AppStore, req: Request, url: URL, path: string): Promise<Response> {
+  if (req.method === "GET" && path === "/viewer.js") {
+    return new Response(VIEWER_JS, {
+      headers: {
+        "content-type": "application/javascript; charset=utf-8",
+        "x-heritage-build": BUILD_ID,
+        // Same rule as HTML: viewer code changes every restart; never serve stale.
+        "cache-control": "no-store",
+      },
+    });
+  }
+  if (req.method === "GET" && path === "/session.js") {
+    return new Response(SESSION_SCRIPT, {
+      headers: {
+        "content-type": "application/javascript; charset=utf-8",
+        "x-heritage-build": BUILD_ID,
+        "cache-control": "no-store",
+      },
+    });
+  }
+  if (req.method === "GET" && path === "/api/status") {
+    return json({ tree: store.tree.persons.length > 0 });
+  }
   if (req.method === "GET" && path === "/api/people") {
     const query = (url.searchParams.get("q") ?? "").trim().toLowerCase();
     if (query.length < 2) return json({ people: [], total: 0 });
@@ -152,20 +196,8 @@ async function route(store: AppStore, req: Request, url: URL, path: string): Pro
   }
   if (req.method === "GET" && path === "/api/tree") {
     if (store.tree.persons.length === 0) return json({ root: null, nodes: [], edges: [], width: 0, height: 0 });
-    const root = url.searchParams.get("root") ?? store.tree.persons[0]!.id;
-    const view = parseView(url);
     try {
-      const layout = familyLayout(store.tree, root, {
-        ...parseDepth(url, view),
-        collapsedFamilyIds: parseIdSet(url, "collapsed"),
-        expandedAncestorIds: parseIdSet(url, "expand"),
-        minimizedAncestorIds: parseIdSet(url, "min"),
-        showSiblings: parseSiblings(url),
-        siblingPersonIds: parseIdSet(url, "siblingsOf"),
-        showYears: parseFlag(url, "years", true),
-        showPhotos: parseFlag(url, "photos", false),
-        view,
-      });
+      const { root, layout } = layoutFromUrl(store, url);
       const summaries = new Map(store.tree.persons.map((p) => [p.id, personSummary(store.tree, p)]));
       return json({
         root,
@@ -182,6 +214,15 @@ async function route(store: AppStore, req: Request, url: URL, path: string): Pro
         edges: layout.edges,
         buses: layout.buses,
       });
+    } catch {
+      return json({ error: "person not found" }, 404);
+    }
+  }
+  if (req.method === "GET" && path === "/api/outline") {
+    if (store.tree.persons.length === 0) return json({ root: null, tree: null });
+    try {
+      const { root, layout } = layoutFromUrl(store, url);
+      return json(outlineFromLayout(store.tree, layout, root));
     } catch {
       return json({ error: "person not found" }, 404);
     }
@@ -221,6 +262,7 @@ async function route(store: AppStore, req: Request, url: URL, path: string): Pro
         parseIdSet(url, "siblingsOf"),
         view,
         parseIdSet(url, "min"),
+        url.searchParams.has("imported") ? store.lastReport : undefined,
       ),
     );
   }
@@ -254,6 +296,9 @@ async function route(store: AppStore, req: Request, url: URL, path: string): Pro
     }
     return html(notFound("page"), 404);
   }
+  if (req.method === "GET" && path === "/file") {
+    return html(fileHealthPage(store.lastReport));
+  }
   if (req.method === "GET" && path === "/import") {
     return html(importPage(url.searchParams.get("report") ? store.lastReport : undefined));
   }
@@ -264,7 +309,7 @@ async function route(store: AppStore, req: Request, url: URL, path: string): Pro
     const { tree, report } = importGedcom(new Uint8Array(await file.arrayBuffer()));
     store.tree = tree;
     store.lastReport = report;
-    return seeOther("/import?report=1");
+    return seeOther("/?imported=1");
   }
   if (req.method === "GET" && path === "/export") return html(exportPage(store.tree));
   if (req.method === "GET" && path === "/export.ged") {

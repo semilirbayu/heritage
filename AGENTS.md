@@ -2,10 +2,11 @@
 
 ## Project
 
-Heritage — a MyHeritage clone focused on family tree maker tools + export.
-- Build / edit family trees (people, relationships, events, media)
-- Import GEDCOM (`.ged`) files
-- Export trees (GEDCOM, and later PDF/image)
+Heritage — a `.ged` (GEDCOM) viewer and explorer.
+- Explore imported family trees (people, relationships, events, media)
+- Import GEDCOM (`.ged`) files; show file health and import warnings
+- Export the tree view (PDF, SVG) and export GEDCOM
+- Editing exists but does not grow
 
 ## Stack / Commands
 
@@ -20,6 +21,7 @@ If `package.json` scripts differ, follow `package.json`.
 
 ## Conventions
 
+- Write every response and every explanation in ASD-STE100 Simplified Technical English: short sentences (max 20 words), one idea per sentence, active voice, present tense, approved words only, no idioms.
 - Keep changes minimal and focused.
 - Prefer editing existing files over creating new ones.
 - Do not commit secrets or `.env` files.

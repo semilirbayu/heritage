@@ -3,6 +3,7 @@
 // No DOM here — the app renders nodes/edges to SVG; tests assert geometry.
 
 import type { Tree } from "../domain/types";
+import { preferredName } from "../domain/tree";
 
 export type TreeViewMode = "family" | "pedigree" | "fan";
 
@@ -33,6 +34,14 @@ export interface LayoutNode {
   hiddenAncestorCount: number;
   /** The focused (root) person: rendered emphasized, never dimmed. */
   isFocus: boolean;
+  /** Absent on person cards. Placeholders stand in for hidden subtrees. */
+  kind?: "placeholder";
+  /** Display name shown on a placeholder card. */
+  label?: string;
+  /** People hidden below (descendant placeholders). */
+  hiddenDescendants?: number;
+  /** People hidden above (ancestor placeholders). */
+  hiddenAncestors?: number;
 }
 
 export interface LayoutEdge {
@@ -117,6 +126,10 @@ export function cardHeightFor(displayName: string): number {
 const MAX_COLUMNS = 4;
 const MAX_VISIBLE_PEOPLE = 500;
 const MAX_SIBLINGS = 12;
+/** Placeholder card geometry: same card width, fits one 72px gap. */
+const PH_W = NODE_W;
+const PH_H = 56;
+const PH_GAP = 8;
 
 function rowWidth(count: number): number {
   return count <= 0 ? 0 : count * NODE_W + (count - 1) * COUPLE_GAP;
@@ -719,6 +732,131 @@ function layoutFamilyView(
   for (const family of familiesByChild.get(rootId) ?? []) {
     for (const child of family.children) if (child !== rootId) siblingIds.add(child);
   }
+
+  // Placeholder cards: one below each cut descendant branch, one above each
+  // cut ancestor line. Pure counts — they never join the visible-people cap.
+  const nameOf = (id: string): string =>
+    preferredName(tree.persons.find((p) => p.id === id) ?? ({ names: [] } as never)) || "Hidden branch";
+  const countHiddenDescendants = (anchor: string): number => {
+    const seen = new Set<string>([anchor]);
+    const stack = [anchor];
+    let count = 0;
+    while (stack.length > 0) {
+      const pid = stack.pop()!;
+      const placed = gen.has(pid);
+      for (const f of familiesByPartner.get(pid) ?? []) {
+        if (!placed) {
+          for (const q of f.partners) {
+            if (q === anchor || seen.has(q)) continue;
+            seen.add(q);
+            if (!gen.has(q)) count++;
+          }
+        }
+        for (const c of f.children) {
+          if (seen.has(c)) continue;
+          seen.add(c);
+          if (!gen.has(c)) count++;
+          stack.push(c);
+        }
+      }
+    }
+    return count;
+  };
+  const firstHiddenAncestorName = (id: string): string => {
+    const seen = new Set<string>([id]);
+    const stack = [id];
+    while (stack.length > 0) {
+      const pid = stack.pop()!;
+      for (const f of familiesByChild.get(pid) ?? []) {
+        for (const q of f.partners) {
+          if (seen.has(q)) continue;
+          seen.add(q);
+          if (!positioned.has(q)) return nameOf(q);
+          stack.push(q);
+        }
+      }
+    }
+    return "Hidden ancestors";
+  };
+  const placeholders: LayoutNode[] = [];
+  // One below-placeholder per hidden branch: partners of a couple share it,
+  // centred under the couple, exactly like their children rows.
+  const belowGroups = new Map<string, LayoutNode[]>();
+  for (const n of nodes) {
+    if (!(n.collapsed || n.atDepthLimit)) continue;
+    const key = n.branchFamilyIds.join(",");
+    const group = belowGroups.get(key) ?? [];
+    group.push(n);
+    belowGroups.set(key, group);
+  }
+  for (const group of belowGroups.values()) {
+    const anchor = group[0]!;
+    const hidden = countHiddenDescendants(anchor.personId);
+    if (hidden <= 0) continue;
+    const left = Math.min(...group.map((m) => m.x));
+    const right = Math.max(...group.map((m) => m.x));
+    const bottom = Math.max(...group.map((m) => m.y + m.h));
+    const labels = [...new Set(group.map((m) => nameOf(m.personId)))];
+    placeholders.push({
+      personId: `ph:below:${anchor.personId}`,
+      x: (left + right) / 2,
+      y: bottom + PH_GAP,
+      h: PH_H,
+      generation: anchor.generation + 0.5,
+      hasDescendants: false,
+      descendantCount: 0,
+      collapsed: anchor.collapsed,
+      atDepthLimit: anchor.atDepthLimit,
+      branchFamilyIds: anchor.branchFamilyIds,
+      hasAncestors: false,
+      atAncestorDepthLimit: false,
+      hasHiddenParents: false,
+      hiddenAncestorCount: 0,
+      isFocus: false,
+      kind: "placeholder",
+      label: labels.join(" & "),
+      hiddenDescendants: hidden,
+      hiddenAncestors: 0,
+    });
+  }
+  for (const n of nodes) {
+    if (n.hiddenAncestorCount > 0) {
+      placeholders.push({
+        personId: `ph:above:${n.personId}`,
+        x: n.x + NODE_W / 2 - PH_W / 2,
+        y: n.y - PH_H - PH_GAP,
+        h: PH_H,
+        generation: n.generation - 0.5,
+        hasDescendants: false,
+        descendantCount: 0,
+        collapsed: false,
+        atDepthLimit: false,
+        branchFamilyIds: [],
+        hasAncestors: false,
+        atAncestorDepthLimit: false,
+        hasHiddenParents: false,
+        hiddenAncestorCount: 0,
+        isFocus: false,
+        kind: "placeholder",
+        label: firstHiddenAncestorName(n.personId),
+        hiddenDescendants: 0,
+        hiddenAncestors: n.hiddenAncestorCount,
+      });
+    }
+  }
+  // A placeholder above the top row would leave the canvas: shift every card
+  // down together so relative layout and row gaps stay identical.
+  const minY = Math.min(0, ...placeholders.map((p) => p.y));
+  if (minY < 0) {
+    const shift = -minY;
+    for (const n of [...nodes, ...placeholders]) n.y += shift;
+  }
+  for (const n of [...nodes, ...placeholders]) {
+    width = Math.max(width, n.x + (n.kind === "placeholder" ? PH_W : NODE_W));
+    height = Math.max(height, n.y + n.h);
+  }
+  nodes.push(...placeholders);
+
   return {
     nodes,
     edges,
@@ -864,12 +1002,49 @@ export function familyLayout(
   let width = MAX_COLUMNS * nodeWidth + (MAX_COLUMNS - 1) * X_GAP;
   let height = 1;
   const generations = [...byGen.entries()].sort((a, b) => a[0] - b[0]);
+  // Ancestors hidden above each card (depth cap, in-law lines, cap hits).
+  // The walk stops at the first placed ancestor — that card carries its own
+  // affordance, so only the person at the top of a cut line counts.
+  const countHiddenAncestors = (id: string): number => {
+    const seen = new Set<string>([id]);
+    const stack = [id];
+    let count = 0;
+    while (stack.length > 0) {
+      const pid = stack.pop()!;
+      for (const f of familiesByChild.get(pid) ?? []) {
+        for (const q of f.partners) {
+          if (seen.has(q)) continue;
+          seen.add(q);
+          if (gen.has(q)) continue;
+          count++;
+          stack.push(q);
+        }
+      }
+    }
+    return count;
+  };
+  const nameOf = (id: string): string =>
+    preferredName(tree.persons.find((p) => p.id === id) ?? ({ names: [] } as never)) || "Hidden branch";
+  const firstHiddenAncestorName = (id: string): string => {
+    for (const f of familiesByChild.get(id) ?? []) {
+      for (const q of f.partners) {
+        if (!gen.has(q)) return nameOf(q);
+      }
+    }
+    return "Hidden ancestors";
+  };
+  let fanCX = 0;
+  let fanCY = 0;
+  let fanStep = 0;
   if (view === "fan") {
     const maxAncestorDepth = Math.max(1, ...[...gen.values()].map((generation) => -generation));
     const radiusStep = NODE_H + Y_GAP;
     const maxRadius = maxAncestorDepth * radiusStep;
     const centerX = maxRadius + nodeWidth / 2;
     const centerY = maxRadius + nodeHeight / 2;
+    fanCX = centerX;
+    fanCY = centerY;
+    fanStep = radiusStep;
     width = centerX * 2;
     height = centerY + nodeHeight / 2;
     for (const [generation, ids] of generations) {
@@ -895,7 +1070,7 @@ export function familyLayout(
             !userExpandedAncestors.has(personId) &&
             (familiesByChild.get(personId)?.length ?? 0) > 0,
           hasHiddenParents: false,
-          hiddenAncestorCount: 0,
+          hiddenAncestorCount: countHiddenAncestors(personId),
           isFocus: personId === rootId,
         });
       });
@@ -933,7 +1108,7 @@ export function familyLayout(
               !userExpandedAncestors.has(personId) &&
               (familiesByChild.get(personId)?.length ?? 0) > 0,
             hasHiddenParents: false,
-            hiddenAncestorCount: 0,
+            hiddenAncestorCount: countHiddenAncestors(personId),
             isFocus: personId === rootId,
           });
         });
@@ -951,6 +1126,57 @@ export function familyLayout(
       if (anchor && nodeById.has(c)) edges.push({ from: anchor, to: c, kind: "parent" });
     }
   }
+  // Placeholder cards above each cut ancestor line: regular rows sit one
+  // card-height up; the fan pushes them one ring outward on the same ray.
+  const placeholders: LayoutNode[] = [];
+  const phW = view === "fan" ? nodeWidth : NODE_W;
+  const phH = view === "fan" ? 40 : PH_H;
+  for (const n of nodes) {
+    if (n.hiddenAncestorCount <= 0) continue;
+    let x: number;
+    let y: number;
+    if (view === "fan") {
+      const acx = n.x + nodeWidth / 2;
+      const acy = n.y + nodeHeight / 2;
+      const dx = acx - fanCX;
+      const dy = acy - fanCY;
+      const outward = dx === 0 && dy === 0 ? -Math.PI / 2 : Math.atan2(dy, dx);
+      const r = Math.hypot(dx, dy) + fanStep;
+      x = fanCX + r * Math.cos(outward) - phW / 2;
+      y = fanCY + r * Math.sin(outward) - phH / 2;
+    } else {
+      x = n.x + NODE_W / 2 - phW / 2;
+      y = n.y - PH_H - PH_GAP;
+    }
+    placeholders.push({
+      personId: `ph:above:${n.personId}`,
+      x,
+      y,
+      h: phH,
+      generation: n.generation - 0.5,
+      hasDescendants: false,
+      descendantCount: 0,
+      collapsed: false,
+      atDepthLimit: false,
+      branchFamilyIds: [],
+      hasAncestors: false,
+      atAncestorDepthLimit: false,
+      hasHiddenParents: false,
+      hiddenAncestorCount: 0,
+      isFocus: false,
+      kind: "placeholder",
+      label: firstHiddenAncestorName(n.personId),
+      hiddenDescendants: 0,
+      hiddenAncestors: n.hiddenAncestorCount,
+    });
+  }
+  const minY = Math.min(0, ...placeholders.map((p) => p.y));
+  if (minY < 0) {
+    const shift = -minY;
+    for (const n of [...nodes, ...placeholders]) n.y += shift;
+  }
+  nodes.push(...placeholders);
+  for (const p of placeholders) width = Math.max(width, p.x + phW);
   for (const node of nodes) {
     height = Math.max(height, node.y + (node.h ?? nodeHeight));
   }

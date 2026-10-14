@@ -128,7 +128,8 @@ describe("heritage app", () => {
     expect(data.nodes.map((n) => n.name).sort()).toEqual(["Ada Lovelace", "Kid Lovelace"]);
     expect(data.edges.some((e) => e.kind === "parent")).toBe(true);
     const shallow = (await (await fetch(new Request("http://x/api/tree?depth=0"))).json()) as typeof data;
-    expect(shallow.nodes).toHaveLength(1);
+    expect(shallow.nodes.filter((n) => n.generation !== undefined && n.name)).toHaveLength(1);
+    expect(shallow.nodes.filter((n) => !n.name)).toHaveLength(1); // one placeholder for the cut branch
     expect((await fetch(new Request("http://x/api/tree?root=ghost"))).status).toBe(404);
   });
 
@@ -167,9 +168,9 @@ describe("heritage app", () => {
     };
     expect(def.nodes).toHaveLength(4);
     const shallow = (await (await fetch(new Request(`http://x/api/tree?root=${rootId}&depth=1`))).json()) as {
-      nodes: unknown[];
+      nodes: { kind?: string }[];
     };
-    expect(shallow.nodes).toHaveLength(2);
+    expect(shallow.nodes.filter((n) => n.kind !== "placeholder")).toHaveLength(2);
   });
 
   test("siblings show by default and hide with siblings=0", async () => {
@@ -222,10 +223,11 @@ describe("heritage app", () => {
       body: "kind=child&given=Grandchild&surname=One",
     }));
     const family = store.tree.families.find((candidate) => candidate.partners.includes(root))!;
-    const expanded = await (await fetch(new Request(`http://x/api/tree?root=${root}&depth=2`))).json() as { nodes: { id: string }[] };
-    const collapsed = await (await fetch(new Request(`http://x/api/tree?root=${root}&depth=2&collapsed=${family.id}`))).json() as { nodes: { id: string }[] };
-    expect(expanded.nodes).toHaveLength(3);
-    expect(collapsed.nodes).toHaveLength(1);
+    const expanded = await (await fetch(new Request(`http://x/api/tree?root=${root}&depth=2`))).json() as { nodes: { kind?: string }[] };
+    const collapsed = await (await fetch(new Request(`http://x/api/tree?root=${root}&depth=2&collapsed=${family.id}`))).json() as { nodes: { kind?: string }[] };
+    expect(expanded.nodes.filter((n) => n.kind !== "placeholder")).toHaveLength(3);
+    expect(collapsed.nodes.filter((n) => n.kind !== "placeholder")).toHaveLength(1);
+    expect(collapsed.nodes.filter((n) => n.kind === "placeholder")).toHaveLength(1);
     expect(store.tree.persons).toHaveLength(3);
   });
 
@@ -311,7 +313,7 @@ describe("heritage app", () => {
     expect(store.tree.persons[0]?.private).toBe(true);
     const home = await text(await fetch(new Request("http://x/")));
     expect(home).toContain('id="viewer"');
-    expect(home).toContain("/api/tree");
+    expect(home).toContain('<script src="/viewer.js"');
     expect(home).toContain('id="drawer"');
     expect(home).toContain("depthSel");
     expect(home).toContain('id="fullBtn"');
@@ -329,6 +331,349 @@ describe("heritage app", () => {
     const home = await text(await fetch(new Request("http://x/")));
     expect(home).toContain("<noscript>");
     expect(home).toContain(`/person/${id}`);
+  });
+});
+
+describe("viewer script served as its own file", () => {
+  test("GET /viewer.js returns the viewer script", async () => {
+    const { fetch } = app();
+    const res = await fetch(new Request("http://x/viewer.js"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("javascript");
+    const body = await text(res);
+    expect(body).toContain("getElementById('viewer')");
+    expect(body).toContain("load();");
+    expect(body).toContain("/api/tree");
+  });
+
+  test("family page loads the script file instead of inlining it", async () => {
+    const { fetch } = app();
+    await create(fetch, "Ada", "Lovelace");
+    const body = await text(await fetch(new Request("http://x/")));
+    expect(body).toContain('<script src="/viewer.js"');
+    expect(body).not.toContain("getElementById('viewer')");
+  });
+
+  test("empty tree home has no viewer script reference", async () => {
+    const { fetch } = app();
+    const body = await text(await fetch(new Request("http://x/")));
+    expect(body).not.toContain("/viewer.js");
+  });
+});
+
+describe("drop-zone first screen", () => {
+  test("empty home shows a drop zone with a file picker and help", async () => {
+    const { fetch } = app();
+    const body = await text(await fetch(new Request("http://x/")));
+    expect(body).toContain('id="dropZone"');
+    expect(body).toContain('type="file"');
+    expect(body).toContain('action="/import"');
+    expect(body).toContain(".ged");
+    expect(body).toContain("/person/new");
+  });
+
+  test("choosing a file imports it and opens the explorer with the report", async () => {
+    const { fetch } = app();
+    const ged = readFileSync(join(__dirname, "fixtures", "minimal-551.ged"));
+    const form = new FormData();
+    form.append("file", new File([ged], "tree.ged", { type: "text/plain" }));
+    const res = await fetch(new Request("http://x/import", { method: "POST", body: form }));
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/?imported=1");
+    const home = await text(await fetch(new Request("http://x/?imported=1")));
+    expect(home).toContain('id="viewer"');
+    expect(home).toContain("Import complete");
+    expect(home).toContain("GEDCOM 5.5.1");
+    expect(home).not.toContain('id="dropZone"');
+  });
+
+  test("home with a live tree opens the explorer directly", async () => {
+    const { fetch } = app();
+    await create(fetch, "Ada", "Lovelace");
+    const body = await text(await fetch(new Request("http://x/")));
+    expect(body).toContain('id="viewer"');
+    expect(body).not.toContain('id="dropZone"');
+  });
+
+  test("post-import report panel stays available on the import page", async () => {
+    const { fetch } = app();
+    const ged = readFileSync(join(__dirname, "fixtures", "minimal-551.ged"));
+    const form = new FormData();
+    form.append("file", new File([ged], "tree.ged", { type: "text/plain" }));
+    await fetch(new Request("http://x/import", { method: "POST", body: form }));
+    const body = await text(await fetch(new Request("http://x/import?report=1")));
+    expect(body).toContain("Import complete");
+    expect(body).toContain("Everything imported cleanly");
+  });
+});
+
+describe("browser holds the file", () => {
+  test("status endpoint reports tree presence", async () => {
+    const { fetch } = app();
+    expect(await (await fetch(new Request("http://x/api/status"))).json()).toEqual({ tree: false });
+    await create(fetch, "Ada", "Lovelace");
+    expect(await (await fetch(new Request("http://x/api/status"))).json()).toEqual({ tree: true });
+  });
+
+  test("session script is served and loaded on every page", async () => {
+    const { fetch } = app();
+    const res = await fetch(new Request("http://x/session.js"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("javascript");
+    const script = await text(res);
+    expect(script).toContain("/api/status");
+    expect(script).toContain("/import");
+    const list = await text(await fetch(new Request("http://x/list")));
+    expect(list).toContain('<script src="/session.js"');
+    const home = await text(await fetch(new Request("http://x/")));
+    expect(home).toContain('<script src="/session.js"');
+  });
+});
+
+describe("file health page", () => {
+  test("file health shows version, encoding, and counts with no query params", async () => {
+    const { fetch } = app();
+    const ged = readFileSync(join(__dirname, "fixtures", "minimal-551.ged"));
+    const form = new FormData();
+    form.append("file", new File([ged], "tree.ged", { type: "text/plain" }));
+    await fetch(new Request("http://x/import", { method: "POST", body: form }));
+    const body = await text(await fetch(new Request("http://x/file")));
+    expect(body).toContain("File health");
+    expect(body).toContain("5.5.1");
+    expect(body).toContain("UTF-8");
+    expect(body).toContain("People");
+    expect(body).toContain("No warnings were reported.");
+  });
+
+  test("file health empty state without an import", async () => {
+    const { fetch } = app();
+    const body = await text(await fetch(new Request("http://x/file")));
+    expect(body).toContain("File health");
+    expect(body).toContain("No file");
+    expect(body).toContain('href="/"');
+  });
+
+  test("file health is one click away from every page", async () => {
+    const { fetch } = app();
+    const home = await text(await fetch(new Request("http://x/")));
+    expect(home).toContain('href="/file"');
+    const list = await text(await fetch(new Request("http://x/list")));
+    expect(list).toContain('href="/file"');
+  });
+});
+
+describe("navigation and hidden editing", () => {
+  test("nav reads Explore, Import, Export, File health with no edit entries", async () => {
+    const { fetch } = app();
+    const body = await text(await fetch(new Request("http://x/list")));
+    const nav = /<nav[\s\S]*?<\/nav>/.exec(body)![0];
+    expect(nav).toContain(">Explore<");
+    expect(nav).toContain('href="/import"');
+    expect(nav).toContain('href="/export"');
+    expect(nav).toContain('href="/file"');
+    expect(nav).not.toContain("/person/new");
+    expect(nav).not.toContain("Add");
+  });
+
+  test("edit affordances are marked and hidden by default", async () => {
+    const { fetch } = app();
+    const id = await create(fetch, "Ada", "Lovelace");
+    const person = await text(await fetch(new Request(`http://x/person/${id}`)));
+    expect(person).toContain('class="edit-only"');
+    expect(person).toContain(".edit-only{display:none}");
+    expect(person).toContain("[data-edit=\"on\"] .edit-only{display:revert}");
+    expect(person).toContain("localStorage.getItem('heritage.edit')");
+    expect(person).toContain('class="read-view"');
+    const home = await text(await app().fetch(new Request("http://x/")));
+    expect(home).toContain('class="empty-divider edit-only"');
+    const list = await text(await fetch(new Request("http://x/list")));
+    expect(list).toContain('class="primary edit-only"');
+  });
+
+  test("drawer edit links are marked edit-only", async () => {
+    const { fetch } = app();
+    const script = await text(await fetch(new Request("http://x/viewer.js")));
+    expect(script).toContain("'secondary edit-only'");
+    expect(script).toContain("'primary edit-only'");
+    expect(script).toContain("'Edit record'");
+  });
+
+  test("edit routes still respond in the default state", async () => {
+    const { fetch, store } = app();
+    const id = await create(fetch, "Ada", "Lovelace");
+    const res = await fetch(
+      new Request(`http://x/person/${id}/edit`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: "given=Augusta&surname=Lovelace",
+      }),
+    );
+    expect(res.status).toBe(303);
+    expect(store.tree.persons[0]?.names[0]?.given).toBe("Augusta");
+  });
+});
+
+describe("editing settings toggle", () => {
+  test("a toggle exists and persists the choice, default off", async () => {
+    const { fetch } = app();
+    const home = await text(await fetch(new Request("http://x/")));
+    expect(home).toContain('id="editToggle"');
+    expect(home).toContain("localStorage.setItem('heritage.edit'");
+    expect(home).toContain("document.documentElement.dataset.edit");
+    expect(home).toContain("localStorage.getItem('heritage.edit')==='on'?'on':'off'");
+  });
+
+  test("the toggle control appears on record pages", async () => {
+    const { fetch } = app();
+    const id = await create(fetch, "Ada", "Lovelace");
+    const person = await text(await fetch(new Request(`http://x/person/${id}`)));
+    expect(person).toContain('id="editToggle"');
+    const list = await text(await fetch(new Request("http://x/list")));
+    expect(list).toContain('id="editToggle"');
+  });
+});
+
+describe("placeholders and truncation notice", () => {
+  test("the tree API returns placeholder nodes with counts", async () => {
+    const { fetch, store } = app();
+    const ada = await create(fetch, "Ada", "Lovelace");
+    const child = await create(fetch, "Byron", "");
+    const res = await fetch(
+      new Request(`http://x/person/${ada}/relation`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: `kind=child&given=Byron&surname=&existing=${encodeURIComponent(child)}`,
+      }),
+    );
+    expect(res.status).toBe(303);
+    const familyId = store.tree.families[0]!.id;
+    const tree = (await (
+      await fetch(new Request(`http://x/api/tree?root=${ada}&collapsed=${familyId}`))
+    ).json()) as { nodes: { kind?: string; personId: string; hiddenDescendants?: number }[] };
+    const ph = tree.nodes.find((n) => n.kind === "placeholder");
+    expect(ph).toBeDefined();
+    expect(ph!.personId).toBe(`ph:below:${ada}`);
+    expect(ph!.hiddenDescendants).toBe(1);
+  });
+
+  test("the viewer draws placeholders and the notice states the 500 limit with controls", async () => {
+    const { fetch } = app();
+    const script = await text(await fetch(new Request("http://x/viewer.js")));
+    expect(script).toContain("n.kind === 'placeholder'");
+    expect(script).toContain("hiddenDescendants");
+    expect(script).toContain("Showing up to 500");
+    expect(script).toContain("depthSel");
+    expect(script).toContain("siblingsBtn");
+  });
+});
+
+  test("the branch depth control collapses and expands to a chosen depth", async () => {
+    const { fetch } = app();
+    await create(fetch, "Ada", "Lovelace");
+    const page = await text(await fetch(new Request("http://x/")));
+    expect(page).toContain('id="depthSel"');
+    expect(page).toContain('aria-label="Collapse or expand to depth"');
+    expect(page).toContain('title="Collapse or expand this branch to a chosen depth"');
+  });
+
+describe("outline panel", () => {
+  test("the outline endpoint returns the branch hierarchy with hidden counts", async () => {
+    const { fetch, store } = app();
+    const root = await create(fetch, "Root", "Tree");
+    await fetch(new Request(`http://x/person/${root}/relation`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "kind=child&given=Child&surname=Tree",
+    }));
+    const child = store.tree.persons.find((p) => p.names[0]?.given === "Child")!;
+    await fetch(new Request(`http://x/person/${child.id}/relation`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "kind=child&given=Grandchild&surname=Tree",
+    }));
+    const full = (await (await fetch(new Request(`http://x/api/outline?root=${root}`))).json()) as {
+      root: string;
+      tree: { id: string; name: string; hiddenAncestors: number; hiddenDescendants: number; children: { id: string; hiddenDescendants: number; children: { id: string }[] }[]; parents: unknown[] };
+    };
+    expect(full.root).toBe(root);
+    expect(full.tree.name).toBe("Root Tree");
+    expect(full.tree.children[0]!.children[0]).toBeDefined();
+    expect(full.tree.hiddenDescendants).toBe(0);
+    const cut = (await (await fetch(new Request(`http://x/api/outline?root=${root}&depth=1`))).json()) as typeof full;
+    expect(cut.tree.children).toHaveLength(1);
+    expect(cut.tree.children[0]!.children).toHaveLength(0);
+    expect(cut.tree.children[0]!.hiddenDescendants).toBe(1);
+    expect((await fetch(new Request("http://x/api/outline?root=ghost"))).status).toBe(404);
+    const dflt = (await (await fetch(new Request("http://x/api/outline"))).json()) as typeof full;
+    expect(dflt.root).toBe(root);
+    const fresh = app();
+    const empty = (await (await fresh.fetch(new Request("http://x/api/outline"))).json()) as { tree: unknown };
+    expect(empty.tree).toBeNull();
+  });
+
+  test("family page ships the outline panel and toolbar toggle", async () => {
+    const { fetch } = app();
+    await create(fetch, "Ada", "Lovelace");
+    const page = await text(await fetch(new Request("http://x/")));
+    expect(page).toContain('id="outline"');
+    expect(page).toContain('id="outlineBtn"');
+    expect(page).toContain('aria-label="Branch outline"');
+  });
+
+  test("the viewer fetches, renders, and refocuses from the outline", async () => {
+    const { fetch } = app();
+    const script = await text(await fetch(new Request("http://x/viewer.js")));
+    expect(script).toContain("'/api/outline?'");
+    expect(script).toContain("renderOutline");
+    expect(script).toContain("outlineBtn");
+    expect(script).toContain("focusBranch(node.id, node.name");
+  });
+});
+
+describe("print to pdf", () => {
+  test("the viewer toolbar ships the print button, title, and print stylesheet", async () => {
+    const { fetch } = app();
+    await create(fetch, "Ada", "Lovelace");
+    const page = await text(await fetch(new Request("http://x/")));
+    expect(page).toContain('id="printBtn"');
+    expect(page).toContain('aria-label="Print tree"');
+    expect(page).toContain('id="printTitle"');
+    expect(page).toContain("@media print");
+  });
+
+  test("the viewer prints the current view through the dialog", async () => {
+    const { fetch } = app();
+    const script = await text(await fetch(new Request("http://x/viewer.js")));
+    expect(script).toContain("window.print()");
+    expect(script).toContain("printTitle.textContent");
+    expect(script).toContain("matchMedia('print')");
+    expect(script).toContain("personSearch.value = ''");
+  });
+});
+
+describe("download svg", () => {
+  test("the viewer toolbar ships the download SVG button", async () => {
+    const { fetch } = app();
+    await create(fetch, "Ada", "Lovelace");
+    const page = await text(await fetch(new Request("http://x/")));
+    expect(page).toContain('id="svgBtn"');
+    expect(page).toContain('aria-label="Download SVG"');
+  });
+
+  test("the viewer serializes the current view to an SVG file", async () => {
+    const { fetch } = app();
+    const script = await text(await fetch(new Request("http://x/viewer.js")));
+    expect(script).toContain("XMLSerializer");
+    expect(script).toContain("image/svg+xml");
+    expect(script).toContain(".download =");
+    expect(script).toContain("setAttribute('xmlns'");
+    expect(script).toContain("viewBox");
+  });
+
+  test("the viewer script compiles as JavaScript", async () => {
+    const { fetch } = app();
+    const script = await text(await fetch(new Request("http://x/viewer.js")));
+    expect(() => new Function(script)).not.toThrow();
   });
 });
 

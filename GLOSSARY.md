@@ -1,8 +1,12 @@
 # Heritage
 
-Family tree maker tools + GEDCOM import/export: a Bun-served, server-rendered web app for building and editing family trees (people, relationships, facts, media) with GEDCOM round-trip.
+A GED file viewer and explorer: a Bun-served, server-rendered web app for exploring family trees imported from GEDCOM files (people, relationships, facts, media), with GEDCOM round-trip and export of the tree view to PDF and SVG. Explore is the main job. Editing exists but does not grow.
 
 ## Language
+
+**File health**:
+A permanent panel that shows what the app read from the imported GED file: version, encoding, record counts, and warnings.
+_Avoid_: import report, health check
 
 ### Deployment
 

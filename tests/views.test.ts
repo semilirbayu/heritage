@@ -3,6 +3,7 @@ import { addChild, addFact, addParent, addPartner, createFamily, createPerson } 
 import type { Tree } from "../src/domain/types";
 import { emptyTree } from "../src/domain/tree";
 import { familyLayout, wrapDisplayName } from "../src/views/family";
+import { outlineFromLayout } from "../src/views/outline";
 import { listPeople } from "../src/views/list";
 
 function demoTree(): { tree: Tree; gp: string; parent: string; kid: string } {
@@ -44,10 +45,16 @@ describe("family layout", () => {
 
   test("depth option caps generations", () => {
     const { tree, parent, kid } = demoTree();
+    const people = (nodes: { personId: string; kind?: string }[]) =>
+      nodes.filter((n) => n.kind !== "placeholder").map((n) => n.personId).sort();
     const shallow = familyLayout(tree, parent, { depth: 0 });
-    expect(shallow.nodes.map((n) => n.personId).sort()).toEqual([parent].sort());
+    expect(people(shallow.nodes)).toEqual([parent].sort());
+    // The cut edges announce themselves: one placeholder above (gp hidden),
+    // one below (kid hidden).
+    expect(shallow.nodes.filter((n) => n.kind === "placeholder")).toHaveLength(2);
     const deep = familyLayout(tree, parent, { depth: 1 });
-    expect(deep.nodes.map((n) => n.personId).sort()).toEqual([tree.persons[0]!.id, parent, kid].sort());
+    expect(people(deep.nodes)).toEqual([tree.persons[0]!.id, parent, kid].sort());
+    expect(deep.nodes.filter((n) => n.kind === "placeholder")).toHaveLength(0);
   });
 
   test("pedigree mode shows only direct ancestors", () => {
@@ -517,14 +524,15 @@ describe("family layout", () => {
     expect(spouseNode.hiddenAncestorCount).toBe(2);
     expect(mine.nodes.find((n) => n.personId === me.id)!.hasHiddenParents).toBe(false);
     expect(mine.nodes.find((n) => n.personId === me.id)!.hiddenAncestorCount).toBe(0);
-    // Expanding that one line reveals it; nothing else minimizes.
-    const before = new Set(mine.nodes.map((n) => n.personId));
+    // Expanding that one line reveals it; nothing else minimizes. The
+    // placeholder above the hidden line correctly disappears with it.
+    const before = new Set(mine.nodes.filter((n) => n.kind !== "placeholder").map((n) => n.personId));
     const expanded = familyLayout(tree, me.id, {
       depth: 2,
       showSiblings: true,
       expandedAncestorIds: new Set([spouse.id]),
     });
-    const afterIds = new Set(expanded.nodes.map((n) => n.personId));
+    const afterIds = new Set(expanded.nodes.filter((n) => n.kind !== "placeholder").map((n) => n.personId));
     expect(afterIds.has(dad.id)).toBe(true);
     expect(afterIds.has(mom.id)).toBe(true);
     for (const id of before) expect(afterIds.has(id)).toBe(true);
@@ -584,6 +592,165 @@ describe("family layout", () => {
     expect(layout.truncatedCount).toBe(101);
     // One row per generation, no wrapping: wide rows scroll and pan.
     expect(layout.width).toBeGreaterThan(1036);
+  });
+});
+
+describe("placeholder nodes", () => {
+  test("a collapsed branch shows a placeholder card with name and counts", () => {
+    const { tree, parent, kid } = demoTree();
+    const fam = tree.families.find((f) => f.children.includes(kid))!;
+    const layout = familyLayout(tree, parent, { depth: 2, collapsedFamilyIds: new Set([fam.id]) });
+    const phs = layout.nodes.filter((n) => n.kind === "placeholder");
+    expect(phs).toHaveLength(1);
+    const below = phs[0]!;
+    expect(below.personId).toBe(`ph:below:${parent}`);
+    expect(below.label).toBe("Parent Old");
+    expect(below.hiddenDescendants).toBe(1);
+    expect(below.hiddenAncestors).toBe(0);
+    expect(below.branchFamilyIds).toContain(fam.id);
+    const anchor = layout.nodes.find((n) => n.personId === parent)!;
+    expect(below.y).toBeGreaterThan(anchor.y);
+    expect(below.generation).toBeGreaterThan(anchor.generation);
+    expect(layout.height).toBeGreaterThanOrEqual(below.y + below.h);
+    expect(layout.width).toBeGreaterThanOrEqual(below.x + below.h);
+  });
+
+  test("a hidden ancestor line shows a placeholder above the card", () => {
+    const { tree, parent, kid } = demoTree();
+    const fam = tree.families.find((f) => f.children.includes(kid))!;
+    const layout = familyLayout(tree, parent, { depth: 0, collapsedFamilyIds: new Set([fam.id]) });
+    const phs = layout.nodes.filter((n) => n.kind === "placeholder");
+    expect(phs).toHaveLength(2);
+    const above = layout.nodes.find((n) => n.personId === `ph:above:${parent}`)!;
+    expect(above).toBeDefined();
+    expect(above.hiddenAncestors).toBe(1);
+    expect(above.hiddenDescendants).toBe(0);
+    expect(above.label).toBe("Gp Old");
+    const anchor = layout.nodes.find((n) => n.personId === parent)!;
+    expect(above.y).toBeLessThan(anchor.y);
+    expect(above.y).toBeGreaterThanOrEqual(0);
+    expect(layout.height).toBeGreaterThanOrEqual(anchor.y + anchor.h);
+  });
+
+  test("placeholders carry expand data, never join person rows, and stay out of the cap", () => {
+    const { tree, parent, kid } = demoTree();
+    const fam = tree.families.find((f) => f.children.includes(kid))!;
+    const layout = familyLayout(tree, parent, { depth: 2, collapsedFamilyIds: new Set([fam.id]) });
+    const rows = new Map<number, unknown[]>();
+    for (const n of layout.nodes) {
+      const list = rows.get(n.generation) ?? [];
+      list.push(n);
+      rows.set(n.generation, list);
+    }
+    expect([...rows.keys()].every((g) => Number.isInteger(g) ? rows.get(g)!.every((n) => (n as { kind?: string }).kind !== "placeholder") : true)).toBe(true);
+    // The 500-person cap is about people: placeholders never count or appear there.
+    const root = createPerson({ given: "Root" });
+    const children = Array.from({ length: 600 }, (_, i) => createPerson({ given: `Child ${i}` }));
+    const bigFam = { ...createFamily({ partners: [root.id] }), children: children.map((c) => c.id) };
+    const big = familyLayout({ ...emptyTree(), persons: [root, ...children], families: [bigFam] }, root.id, { depth: 1 });
+    expect(big.nodes.filter((n) => n.kind === "placeholder")).toHaveLength(0);
+  });
+});
+
+describe("collapse and expand to depth", () => {
+  const peopleOf = (nodes: { personId: string; kind?: string }[]) =>
+    nodes.filter((n) => n.kind !== "placeholder").map((n) => n.personId).sort();
+  const phOf = (nodes: {
+    kind?: string;
+    personId: string;
+    x: number;
+    y: number;
+    label?: string;
+    hiddenAncestors?: number;
+    hiddenDescendants?: number;
+  }[]) => nodes.filter((n) => n.kind === "placeholder");
+
+  test("family node sets follow the chosen depth in both directions", () => {
+    const { tree, parent } = demoTree();
+    const cut = familyLayout(tree, parent, { depth: 0 });
+    expect(peopleOf(cut.nodes)).toEqual([parent].sort());
+    expect(phOf(cut.nodes)).toHaveLength(2);
+    const open = familyLayout(tree, parent, { depth: 1 });
+    expect(peopleOf(open.nodes)).toEqual(tree.persons.map((p) => p.id).sort());
+    expect(phOf(open.nodes)).toHaveLength(0);
+  });
+
+  test("pedigree collapses and expands to depth with a placeholder at the cut", () => {
+    const { tree, gp, parent, kid } = demoTree();
+    const cut = familyLayout(tree, parent, { depth: 0, view: "pedigree" });
+    expect(peopleOf(cut.nodes)).toEqual([parent].sort());
+    const ph = phOf(cut.nodes);
+    expect(ph).toHaveLength(1);
+    expect(ph[0]!.personId).toBe(`ph:above:${parent}`);
+    expect(ph[0]!.hiddenAncestors).toBe(1);
+    expect(ph[0]!.label).toBe("Gp Old");
+    const open = familyLayout(tree, parent, { depth: 1, view: "pedigree" });
+    expect(peopleOf(open.nodes).sort()).toEqual([parent, gp].sort());
+    expect(phOf(open.nodes)).toHaveLength(0);
+    expect(peopleOf(open.nodes)).not.toContain(kid);
+  });
+
+  test("fan collapses and expands to depth with a placeholder outward at the cut", () => {
+    const { tree, gp, parent, kid } = demoTree();
+    const cut = familyLayout(tree, parent, { depth: 0, view: "fan" });
+    expect(peopleOf(cut.nodes)).toEqual([parent].sort());
+    const ph = phOf(cut.nodes);
+    expect(ph).toHaveLength(1);
+    expect(ph[0]!.personId).toBe(`ph:above:${parent}`);
+    expect(ph[0]!.hiddenAncestors).toBe(1);
+    const anchor = cut.nodes.find((n) => n.personId === parent)!;
+    expect(ph[0]!.y).toBeLessThan(anchor.y);
+    expect(ph[0]!.x).toBeCloseTo(anchor.x, 0);
+    const open = familyLayout(tree, parent, { depth: 1, view: "fan" });
+    expect(peopleOf(open.nodes).sort()).toEqual([parent, gp].sort());
+    expect(phOf(open.nodes)).toHaveLength(0);
+    expect(peopleOf(open.nodes)).not.toContain(kid);
+  });
+
+  test("collapsing to depth respects the visible-people cap", () => {
+    const root = createPerson({ given: "Root" });
+    const children = Array.from({ length: 600 }, (_, i) => createPerson({ given: `Child ${i}` }));
+    const fam = { ...createFamily({ partners: [root.id] }), children: children.map((c) => c.id) };
+    const layout = familyLayout({ ...emptyTree(), persons: [root, ...children], families: [fam] }, root.id, { depth: 0 });
+    expect(layout.nodes.filter((n) => n.kind !== "placeholder")).toHaveLength(1);
+    expect(phOf(layout.nodes).filter((n) => n.hiddenDescendants === 600)).toHaveLength(1);
+    expect(layout.truncatedCount).toBe(0);
+  });
+});
+
+describe("outline model", () => {
+  test("lists the focused branch as a nested hierarchy from the layout", () => {
+    const { tree, gp, parent, kid } = demoTree();
+    const layout = familyLayout(tree, parent, {});
+    const out = outlineFromLayout(tree, layout, parent);
+    expect(out.root).toBe(parent);
+    expect(out.tree!.name).toBe("Parent Old");
+    expect(out.tree!.parents.map((p) => p.id)).toEqual([gp]);
+    expect(out.tree!.children.map((c) => c.id)).toEqual([kid]);
+    expect(out.tree!.parents[0]!.parents).toHaveLength(0);
+    expect(out.tree!.children[0]!.children).toHaveLength(0);
+    expect(out.tree!.hiddenAncestors).toBe(0);
+    expect(out.tree!.hiddenDescendants).toBe(0);
+  });
+
+  test("collapsed and capped branches carry their hidden counts", () => {
+    const { tree, parent } = demoTree();
+    const cut = familyLayout(tree, parent, { depth: 0 });
+    const out = outlineFromLayout(tree, cut, parent);
+    expect(out.tree!.children).toHaveLength(0);
+    expect(out.tree!.hiddenDescendants).toBe(1);
+    expect(out.tree!.parents).toHaveLength(0);
+    expect(out.tree!.hiddenAncestors).toBe(1);
+  });
+
+  test("cap-truncated children show as hidden counts on their parent", () => {
+    const root = createPerson({ given: "Root" });
+    const children = Array.from({ length: 600 }, (_, i) => createPerson({ given: `Child ${i}` }));
+    const fam = { ...createFamily({ partners: [root.id] }), children: children.map((c) => c.id) };
+    const layout = familyLayout({ ...emptyTree(), persons: [root, ...children], families: [fam] }, root.id, { depth: 1 });
+    const out = outlineFromLayout({ ...emptyTree(), persons: [root, ...children], families: [fam] }, layout, root.id);
+    expect(out.tree!.children).toHaveLength(499);
+    expect(out.tree!.hiddenDescendants).toBe(101);
   });
 });
 
