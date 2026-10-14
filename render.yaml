@@ -1,0 +1,11 @@
+# Render Blueprint for the Heritage demo deploy (ADR-0003).
+# Bun apps use the Node native runtime with bun build/start commands:
+# https://bun.com/guides/deployment/render
+services:
+  - type: web
+    name: heritage
+    runtime: node
+    plan: free
+    buildCommand: bun install
+    startCommand: bun src/main.ts
+    healthCheckPath: /
