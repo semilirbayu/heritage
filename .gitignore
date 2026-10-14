@@ -21,3 +21,6 @@ Thumbs.db
 # Test / coverage
 coverage/
 *.log
+
+# Local agent skills (reinstallable via skills-lock.json)
+.agents/
