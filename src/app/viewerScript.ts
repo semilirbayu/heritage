@@ -131,7 +131,7 @@ async function load(syncUrl, recenter) {
   notice.replaceChildren();
   if (data.truncatedCount) {
     notice.hidden = false;
-    notice.append('Showing up to 500 people of ' + totalPeople + '. Use the ');
+    notice.append('Showing up to ' + (data.limit || 500) + ' people of ' + totalPeople + '. Use the ');
     const depthBtn = document.createElement('button');
     depthBtn.type = 'button';
     depthBtn.textContent = 'Generations control';
@@ -151,14 +151,19 @@ async function load(syncUrl, recenter) {
   }
   counts.textContent = nodes.filter(n => !n.kind).length + ' people shown';
   draw();
-  const outlineSeq = ++outlineReq;
-  fetch('/api/outline?' + q)
-    .then(r => (r.ok ? r.json() : null))
-    .then(data => { if (outlineSeq === outlineReq) renderOutline(data); })
-    .catch(() => {});
+  lastTreeQuery = q.toString();
+  if (outlinePanel && !outlinePanel.hidden) refreshOutline();
   if (recenter !== false) centerOnRoot();
 }
 let outlineReq = 0;
+let lastTreeQuery = '';
+function refreshOutline() {
+  const seq = ++outlineReq;
+  fetch('/api/outline?' + lastTreeQuery)
+    .then(r => (r.ok ? r.json() : null))
+    .then(data => { if (seq === outlineReq) renderOutline(data); })
+    .catch(() => {});
+}
 function renderOutline(data) {
   if (!outlinePanel) return;
   outlinePanel.replaceChildren();
@@ -285,15 +290,14 @@ function draw() {
       const label = n.label || 'Hidden branch';
       const pg = el('g', { class: 'node placeholder', tabindex: '0', role: 'button', 'aria-label': label + ': ' + (parts.join(', ') || 'hidden people') });
       pg.appendChild(el('rect', { x: n.x, y: n.y, width: W, height: n.h || 56, rx: 8 }));
-      pg.appendChild(el('text', { class: 'node-name', x: n.x + 12, y: n.y + 23, 'font-size': 13 }, label.length > 26 ? label.slice(0, 25) + '…' : label));
-      pg.appendChild(el('text', { class: 'node-sub', x: n.x + 12, y: n.y + 43, 'font-size': 11 }, parts.join(' · ') || 'Hidden branch'));
+      pg.appendChild(el('text', { class: 'node-name', x: n.x + 12, y: n.y + 20, 'font-size': 13 }, label.length > 26 ? label.slice(0, 25) + '…' : label));
+      pg.appendChild(el('text', { class: 'node-sub', x: n.x + 12, y: n.y + 40, 'font-size': 11 }, parts.join(' · ') || 'Hidden branch'));
       pg.appendChild(el('title', {}, label + ' — click to expand'));
       const expand = ev => {
         ev.preventDefault(); ev.stopPropagation();
-        if (n.personId.indexOf('ph:above:') === 0) {
-          const pid = n.personId.slice('ph:above:'.length);
-          minimizedAncestors.delete(pid);
-          expandedAncestors.add(pid);
+        if (n.direction === 'above') {
+          minimizedAncestors.delete(n.anchorId);
+          expandedAncestors.add(n.anchorId);
         } else if (n.collapsed) {
           (n.branchFamilyIds || []).forEach(id => collapsed.delete(id));
         } else if (n.atDepthLimit && depth && Number.isFinite(Number(depth))) {
@@ -552,6 +556,7 @@ outlineBtn.addEventListener('click', ev => {
   const open = outlinePanel.hidden;
   outlinePanel.hidden = !open;
   outlineBtn.setAttribute('aria-expanded', String(open));
+  if (open) refreshOutline();
 });
 // Print: clear search dimming, state the title, fit the chart, print.
 // The print stylesheet hides the chrome; matchMedia refits to paper size.
@@ -575,10 +580,8 @@ printBtn.addEventListener('click', () => {
 });
 // Download SVG: clone the stage, inline resolved styles (the page
 // stylesheet does not travel with the file), reset pan and zoom, download.
+// The search stays as it is, so the file matches the current view exactly.
 document.getElementById('svgBtn').addEventListener('click', () => {
-  const prevSearch = personSearch.value;
-  personSearch.value = '';
-  draw();
   const clone = svg.cloneNode(true);
   const srcEls = svg.querySelectorAll('*');
   const dstEls = clone.querySelectorAll('*');
@@ -608,8 +611,6 @@ document.getElementById('svgBtn').addEventListener('click', () => {
   a.click();
   a.remove();
   URL.revokeObjectURL(a.href);
-  personSearch.value = prevSearch;
-  draw();
 });
 document.getElementById('siblingsBtn').addEventListener('click', () => { showSiblings = !showSiblings; load(); });
 personSearch.addEventListener('input', () => {

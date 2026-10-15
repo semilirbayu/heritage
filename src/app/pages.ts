@@ -126,7 +126,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .tree-notice{margin:0;padding:9px 13px;border:1px solid var(--line);border-left:3px solid var(--accent);background:var(--surface-alt);color:var(--label);font-size:var(--fs-sm)}
 .tree-notice[hidden]{display:none}
 .tree-notice button{background:none;border:0;color:var(--accent);font:inherit;font-weight:600;cursor:pointer;padding:0;text-decoration:underline;text-underline-offset:2px}
-#viewer .node.placeholder rect{fill:var(--surface-alt);stroke:var(--line-strong);stroke-width:1.5;stroke-dasharray:6 4;filter:none}
+#viewer .node.placeholder rect{fill:#fff;stroke:var(--line-strong);stroke-width:1.5;stroke-dasharray:6 4;filter:drop-shadow(0 4px 9px rgba(21,26,32,.08))}
 #viewer .node.placeholder:hover rect,#viewer .node.placeholder:focus rect{stroke:var(--accent);stroke-width:2}
 .person-suggestions{position:absolute;left:0;right:0;top:calc(100% + 7px);z-index:5;background:var(--surface);border:1px solid var(--line);border-radius:var(--r1);box-shadow:var(--shadow-lift);overflow:hidden}
 .person-suggestion{display:block;width:100%;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:10px 12px;text-align:left;background:var(--surface);color:var(--ink);font-weight:500;font-size:14px}
@@ -188,7 +188,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .outline-list .outline-focus>button{font-weight:700}
 .print-title{display:none}
 @media print{
-  .site-header,.site-nav,.site-footer,.page-heading,.canvas-tip,.import-report,#toolbar,#treeNotice,.zoom-cluster,.canvas-status,.outline-panel,#drawer,.settings-menu,.person-suggestions{display:none!important}
+  .site-header,.site-nav,.site-footer,.page-heading,.canvas-tip,.import-complete,#toolbar,#treeNotice,.zoom-cluster,.canvas-status,.outline-panel,#drawer,.settings-menu,.person-suggestions{display:none!important}
   html,body{background:#fff}
   .page:has(#viewer){padding:0;height:auto}
   .canvas-shell{border:0;box-shadow:none;padding:0}
@@ -246,8 +246,12 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .edit-only{display:none}
 [data-edit="on"] .edit-only{display:revert}
 [data-edit="on"] .read-view{display:none}
-.site-footer{max-width:1440px;margin:0 auto;padding:12px clamp(16px,4vw,48px) 30px;border-top:1px solid var(--line)}
+.site-footer{max-width:1440px;margin:0 auto;padding:12px clamp(16px,4vw,48px) 30px;border-top:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
 .site-footer .check-option{min-height:32px;font-size:var(--fs-sm)}
+.footer-nav{display:flex;gap:16px}
+.footer-nav a{color:var(--muted);font-size:var(--fs-sm);text-decoration:none}
+.footer-nav a:hover{color:var(--ink);text-decoration:underline}
+.upload-zone.dragging{border-color:var(--accent);background:var(--surface-alt)}
 .fact-list{width:100%;border-collapse:collapse}
 .fact-list th{text-align:left;color:var(--muted);font-size:12px;font-weight:600;padding:8px;border-bottom:1px solid var(--line)}
 .fact-list td{padding:10px 8px;border-bottom:1px solid var(--line);color:var(--label)}
@@ -256,10 +260,10 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .relation-list li{padding:10px 0;border-bottom:1px solid var(--line)}
 .stack-form{display:grid;gap:12px}
 .stack-form .pair{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.upload-panel{padding:28px;max-width:760px}.upload-panel h2,.import-report h2{font:600 var(--fs-lg)/1.3 var(--font-display);letter-spacing:-.01em;margin:0 0 6px}
+.upload-panel{padding:28px;max-width:760px}.upload-panel h2,.import-complete h2{font:600 var(--fs-lg)/1.3 var(--font-display);letter-spacing:-.01em;margin:0 0 6px}
 .upload-zone{border:1.5px dashed var(--line-strong);background:var(--surface-alt);border-radius:var(--r2);padding:28px;text-align:center;margin:16px 0}
 .upload-zone p{color:var(--muted);font-size:var(--fs-sm);margin:12px 0 0}
-.import-report{padding:22px;margin-top:18px}
+.import-complete{padding:22px;margin-top:18px}
 .report-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:18px 0}
 .stat{background:var(--surface-alt);border:1px solid var(--line);border-radius:var(--r1);padding:12px}
 .stat strong{display:block;font:600 22px/1.2 var(--font-display)}
@@ -281,8 +285,8 @@ function shell(title: string, body: string, active: "tree" | "people" | "import"
 <title>${esc(title)} · Heritage</title>
 <style>${TOKENS}</style>
 <script>try{const e=localStorage.getItem('heritage.edit')==='on'?'on':'off';document.documentElement.dataset.edit=e;document.addEventListener('DOMContentLoaded',()=>{const t=document.getElementById('editToggle');if(!t)return;t.checked=e==='on';t.addEventListener('change',()=>{const v=t.checked?'on':'off';localStorage.setItem('heritage.edit',v);document.documentElement.dataset.edit=v})})}catch(err){}</script>
-</head><body><header class="site-header"><a href="/" class="brand"><span class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 20V11M12 14 7 9M12 14l5-5M7 9V5M17 9V5M12 11V5"/><circle cx="7" cy="4" r="2" fill="currentColor"/><circle cx="17" cy="4" r="2" fill="currentColor"/><circle cx="12" cy="4" r="2" fill="currentColor"/></svg></span>Heritage</a><nav class="site-nav" aria-label="Main navigation">${item("tree", "/", "Explore")}${item("people", "/list", "People")}${item("import", "/import", "Import")}${item("export", "/export", "Export")}${item("file", "/file", "File health")}</nav></header>
-<main class="page">${body}</main><footer class="site-footer"><label class="check-option"><input id="editToggle" type="checkbox"><span>Editing</span></label></footer><script src="/session.js" defer></script></body></html>`;
+</head><body><header class="site-header"><a href="/" class="brand"><span class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 20V11M12 14 7 9M12 14l5-5M7 9V5M17 9V5M12 11V5"/><circle cx="7" cy="4" r="2" fill="currentColor"/><circle cx="17" cy="4" r="2" fill="currentColor"/><circle cx="12" cy="4" r="2" fill="currentColor"/></svg></span>Heritage</a><nav class="site-nav" aria-label="Main navigation">${item("tree", "/", "Explore")}${item("import", "/import", "Import")}${item("export", "/export", "Export")}</nav></header>
+<main class="page">${body}</main><footer class="site-footer"><nav class="footer-nav" aria-label="Secondary navigation"><a href="/list">People</a><a href="/file">File health</a></nav><div class="footer-settings" role="group" aria-label="Settings"><label class="check-option"><input id="editToggle" type="checkbox"><span>Editing</span></label></div></footer><script src="/session.js" defer></script></body></html>`;
 }
 
 function lifeYears(p: Person): string {
@@ -309,12 +313,12 @@ export function familyPage(
   siblingPersonIds: ReadonlySet<string> = new Set(),
   view: TreeViewMode = "family",
   minimizedAncestorIds: ReadonlySet<string> = new Set(),
-  importedReport: ImportReport | undefined = undefined,
+  importedHealth: ImportReport | undefined = undefined,
 ): string {
   if (tree.persons.length === 0) {
     return shell(
       "Family tree",
-      `${importedReport ? importReportPanel(importedReport) : ""}<div class="panel empty-panel"><div><h2>Open a GEDCOM file</h2><p>Drop a .ged file on the box, or choose one from your computer. We show the tree, the branches, and anything the file could not tell us.</p>
+      `${importedHealth ? importCompletePanel(importedHealth) : ""}<div class="panel empty-panel"><div><h2>Open a GEDCOM file</h2><p>Drop a .ged file on the box, or choose one from your computer. We show the tree, the branches, and anything the file could not tell us.</p>
       <form class="upload-zone" id="dropZone" method="post" action="/import" enctype="multipart/form-data"><input type="file" name="file" accept=".ged" required><p>GEDCOM 5.5, 5.5.1 or 7.x</p><p><button class="primary">Open family tree</button></p></form>
       <div class="empty-divider edit-only">No file yet? <a href="/person/new">Add a person manually</a></div></div></div>
       <div class="empty-illustration" aria-hidden="true"><svg viewBox="0 0 160 160" fill="none"><path d="M80 142V93M80 111 51 83M80 111l29-28M51 83V51M109 83V51M80 93V43" style="stroke:var(--line-strong)" stroke-width="3" stroke-linecap="round"/><path d="M35 48c0-9 7-16 16-16s16 7 16 16-7 16-16 16-16-7-16-16ZM93 48c0-9 7-16 16-16s16 7 16 16-7 16-16 16-16-7-16-16ZM64 39c0-9 7-16 16-16s16 7 16 16-7 16-16 16-16-7-16-16Z" style="fill:var(--surface);stroke:var(--line-strong)" stroke-width="3"/><circle cx="80" cy="126" r="15" style="fill:var(--accent-pale);stroke:var(--accent)" stroke-width="3"/></svg></div></div>
@@ -367,7 +371,7 @@ export function familyPage(
   return shell(
     viewTitle,
     `    <div class="page-heading compact"><div><h1>${viewTitle}</h1></div><div class="heading-actions"><a class="primary edit-only" href="/person/new">${icon("plus", 16)} Add person</a></div></div>
-    ${importedReport ? importReportPanel(importedReport) : ""}
+    ${importedHealth ? importCompletePanel(importedHealth) : ""}
     <div class="canvas-shell">
     <p id="printTitle" class="print-title"></p>
     <div id="toolbar" role="toolbar" aria-label="Tree controls">
@@ -377,8 +381,8 @@ export function familyPage(
       <span class="control-divider"></span>
       <label class="toolbar-search">${icon("search", 16)}<input id="treeSearch" type="search" placeholder="Search everyone" aria-label="Search everyone in the tree" autocomplete="off"><div id="personSuggestions" class="person-suggestions" role="listbox" hidden></div></label>
       <span class="toolbar-count" id="counts" aria-live="polite"></span>
-      <button id="printBtn" class="icon-button" type="button" aria-label="Print tree" title="Print to PDF">${icon("print")}</button>
-      <button id="svgBtn" class="icon-button" type="button" aria-label="Download SVG" title="Download SVG">${icon("download")}</button>
+      <button id="printBtn" class="secondary" type="button" title="Print to PDF">${icon("print", 16)} Print / Save as PDF</button>
+      <button id="svgBtn" class="secondary" type="button" title="Download the view as SVG">${icon("download", 16)} Download SVG</button>
       <button id="outlineBtn" class="icon-button" type="button" aria-label="Branch outline" aria-expanded="false" title="Branch outline">${icon("outline")}</button>
       <div class="toolbar-menu-wrap">
         <button id="settingsBtn" class="icon-button" type="button" aria-label="Tree settings" aria-haspopup="true" aria-expanded="false">${icon("gear")}</button>
@@ -499,23 +503,23 @@ export function newPersonPage(): string {
   );
 }
 
-/** Facts (version, encoding, counts) and warnings from an import report. */
-function reportFacts(report: ImportReport): string {
-  return `<p class="quiet">GEDCOM ${esc(report.version)} · ${esc(report.encoding)}${report.hadBom ? " · BOM" : ""}</p><div class="report-stats">${[[report.counts.individuals,"People"],[report.counts.families,"Families"],[report.counts.notes,"Notes"],[report.counts.sources,"Sources"],[report.counts.media,"Media"]].map(([n,label]) => `<div class="stat"><strong>${n}</strong><span>${label}</span></div>`).join("")}</div>`;
+/** Facts (version, encoding, counts) and warnings from the file health data. */
+function healthFacts(health: ImportReport): string {
+  return `<p class="quiet">GEDCOM ${esc(health.version)} · ${esc(health.encoding)}${health.hadBom ? " · BOM" : ""}</p><div class="report-stats">${[[health.counts.individuals,"People"],[health.counts.families,"Families"],[health.counts.notes,"Notes"],[health.counts.sources,"Sources"],[health.counts.media,"Media"]].map(([n,label]) => `<div class="stat"><strong>${n}</strong><span>${label}</span></div>`).join("")}</div>`;
 }
 
-function reportWarnings(report: ImportReport): string {
-  return `<h3>${report.warnings.length ? "Things to review" : "Everything imported cleanly"}</h3><ul>${report.warnings.map((w) => `<li><b>${esc(w.code)}</b> ${esc(w.message)}</li>`).join("") || "<li>No warnings were reported.</li>"}</ul>`;
+function healthWarnings(health: ImportReport): string {
+  return `<h3>${health.warnings.length ? "Things to review" : "Everything imported cleanly"}</h3><ul>${health.warnings.map((w) => `<li><b>${esc(w.code)}</b> ${esc(w.message)}</li>`).join("") || "<li>No warnings were reported.</li>"}</ul>`;
 }
 
-/** The post-import report panel. Same markup wherever the report shows. */
-export function importReportPanel(report: ImportReport): string {
-  return `<section class="panel import-report"><h2>Import complete</h2>${reportFacts(report)}${reportWarnings(report)}<a class="primary" href="/">Open family tree</a></section>`;
+/** The post-import summary panel. Same markup wherever the panel shows. */
+export function importCompletePanel(health: ImportReport): string {
+  return `<section class="panel import-complete"><h2>Import complete</h2>${healthFacts(health)}${healthWarnings(health)}<a class="primary" href="/">Open family tree</a></section>`;
 }
 
 /** Permanent file health: always reachable, no query parameters. */
-export function fileHealthPage(report: ImportReport | undefined): string {
-  if (!report) {
+export function fileHealthPage(health: ImportReport | undefined): string {
+  if (!health) {
     return shell(
       "File health",
       `<div class="page-heading"><div><h1>File health</h1></div></div><section class="panel section-card"><p>No file imported in this session yet. Open a GEDCOM file and this page shows its version, encoding, record counts, and warnings.</p><a class="primary" href="/">Open a GEDCOM file</a></section>`,
@@ -524,16 +528,16 @@ export function fileHealthPage(report: ImportReport | undefined): string {
   }
   return shell(
     "File health",
-    `<div class="page-heading"><div><h1>File health</h1><p>What the app read from your GED file, and what it could not read.</p></div></div><section class="panel import-report">${reportFacts(report)}${reportWarnings(report)}</section>`,
+    `<div class="page-heading"><div><h1>File health</h1><p>What the app read from your GED file, and what it could not read.</p></div></div><section class="panel import-complete">${healthFacts(health)}${healthWarnings(health)}</section>`,
     "file",
   );
 }
 
-export function importPage(report: ImportReport | undefined): string {
-  const rep = report ? importReportPanel(report) : "";
+export function importPage(health: ImportReport | undefined): string {
+  const panel = health ? importCompletePanel(health) : "";
   return shell(
     "Import GEDCOM",
-    `<div class="page-heading"><div><h1>Import a family tree</h1><p>Upload a GEDCOM file to add its people, relationships, dates, and notes.</p></div></div><section class="panel upload-panel"><h2>Choose a GEDCOM file</h2><form method="post" action="/import" enctype="multipart/form-data"><div class="upload-zone"><input type="file" name="file" accept=".ged" required><p>GEDCOM 5.5, 5.5.1 or 7.x</p></div><p class="quiet">Your current tree will be replaced by this import.</p><button class="primary">Import family tree</button></form></section>${rep}`,
+    `<div class="page-heading"><div><h1>Import a family tree</h1><p>Upload a GEDCOM file to add its people, relationships, dates, and notes.</p></div></div><section class="panel upload-panel"><h2>Choose a GEDCOM file</h2><form method="post" action="/import" enctype="multipart/form-data"><div class="upload-zone"><input type="file" name="file" accept=".ged" required><p>GEDCOM 5.5, 5.5.1 or 7.x</p></div><p class="quiet">Your current tree will be replaced by this import.</p><button class="primary">Import family tree</button></form></section>${panel}`,
     "import",
   );
 }

@@ -387,8 +387,8 @@ export function preferredEvent(
   return events.find((e) => e.type === type);
 }
 
-export function preferredName(person: Person): string {
-  return person.names[0]?.display ?? "";
+export function preferredName(person: Person | undefined): string {
+  return person?.names[0]?.display ?? "";
 }
 
 export interface Kin {

@@ -1,6 +1,7 @@
 // Browser-side session: the raw .ged file lives in this browser, never on
 // disk server-side (ADR-0005). The pure helpers below are the decision logic
-// covered by tests; SESSION_SCRIPT is the browser code that applies it.
+// covered by tests; SESSION_SCRIPT embeds those same helpers, so the shipped
+// browser code and the tested code are one thing.
 
 export const SESSION_KEY = "heritage.ged.v1";
 
@@ -14,25 +15,36 @@ export function shouldRestore(hasStoredFile: boolean, serverHasTree: boolean): b
   return hasStoredFile && !serverHasTree;
 }
 
-export function readStored(store: StorageLike, key: string = SESSION_KEY): string | null {
+/** Read the stored file. Reports failure, so restore can explain itself. */
+export function readStored(store: StorageLike): { value: string | null; failed: boolean } {
   try {
-    return store.getItem(key);
+    return { value: store.getItem(SESSION_KEY), failed: false };
   } catch {
-    return null;
+    return { value: null, failed: true };
   }
 }
 
-export function writeStored(store: StorageLike, value: string, key: string = SESSION_KEY): "ok" | "full" {
+export function writeStored(store: StorageLike, value: string): "ok" | "full" {
   try {
-    store.setItem(key, value);
+    store.setItem(SESSION_KEY, value);
     return "ok";
   } catch {
     return "full";
   }
 }
 
+/** A clear message when a needed restore cannot run (spec US6). */
+export function restoreMessage(readFailed: boolean, serverHasTree: boolean): string | null {
+  if (!readFailed || serverHasTree) return null;
+  return "Browser storage is unavailable, so we cannot restore your file.";
+}
+
 export const SESSION_SCRIPT = `(() => {
-  const KEY = '${SESSION_KEY}';
+  const SESSION_KEY = '${SESSION_KEY}';
+  const shouldRestore = ${shouldRestore.toString()};
+  const readStored = ${readStored.toString()};
+  const writeStored = ${writeStored.toString()};
+  const restoreMessage = ${restoreMessage.toString()};
   const notice = msg => {
     let el = document.getElementById('sessionNotice');
     if (!el) {
@@ -47,10 +59,7 @@ export const SESSION_SCRIPT = `(() => {
   };
   const storeFile = file => new Promise(resolve => {
     const fr = new FileReader();
-    fr.onload = () => {
-      try { localStorage.setItem(KEY, fr.result); resolve(true); }
-      catch { resolve(false); }
-    };
+    fr.onload = () => resolve(writeStored(localStorage, fr.result) === 'ok');
     fr.onerror = () => resolve(false);
     fr.readAsDataURL(file);
   });
@@ -82,18 +91,21 @@ export const SESSION_SCRIPT = `(() => {
   });
   // Restore: if the server lost the tree, re-send the stored file.
   fetch('/api/status').then(r => r.json()).then(status => {
-    if (!status || status.tree) return;
-    let dataUrl = null;
-    try { dataUrl = localStorage.getItem(KEY); } catch { return; }
-    if (!dataUrl) return;
-    fetch(dataUrl)
+    const serverHasTree = !!(status && status.tree);
+    const stored = readStored(localStorage);
+    if (!shouldRestore(stored.value !== null, serverHasTree)) {
+      const msg = restoreMessage(stored.failed, serverHasTree);
+      if (msg) notice(msg);
+      return;
+    }
+    fetch(stored.value)
       .then(r => r.blob())
       .then(blob => {
         const fd = new FormData();
         fd.append('file', new File([blob], 'restored.ged', { type: 'text/plain' }));
         return fetch('/import', { method: 'POST', body: fd, redirect: 'follow' });
       })
-      .then(res => { if (res && res.ok) location.href = res.url || '/'; })
+      .then(res => { if (res && res.ok) location.href = '/'; })
       .catch(() => notice('We could not restore your file. Drop it on the home screen again.'));
   }).catch(() => {});
 })();

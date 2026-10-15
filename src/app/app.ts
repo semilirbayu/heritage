@@ -32,7 +32,7 @@ import {
   notFound,
   personPage,
 } from "./pages";
-import { familyLayout, type FamilyLayout, type TreeViewMode, wrapDisplayName } from "../views/family";
+import { familyLayout, MAX_VISIBLE_PEOPLE, type FamilyLayout, type TreeViewMode, wrapDisplayName } from "../views/family";
 import { outlineFromLayout } from "../views/outline";
 import { kinOf, preferredEvent, preferredName } from "../domain/tree";
 import { yearOf } from "../views/list";
@@ -41,7 +41,7 @@ import { SESSION_SCRIPT } from "./session";
 
 export interface AppStore {
   tree: Tree;
-  lastReport?: ImportReport;
+  lastHealth?: ImportReport;
 }
 
 const html = (body: string, status = 200): Response =>
@@ -202,6 +202,7 @@ async function route(store: AppStore, req: Request, url: URL, path: string): Pro
       return json({
         root,
         totalPeople: store.tree.persons.length,
+        limit: MAX_VISIBLE_PEOPLE,
         width: layout.width,
         height: layout.height,
         siblingCount: layout.siblingCount,
@@ -262,7 +263,7 @@ async function route(store: AppStore, req: Request, url: URL, path: string): Pro
         parseIdSet(url, "siblingsOf"),
         view,
         parseIdSet(url, "min"),
-        url.searchParams.has("imported") ? store.lastReport : undefined,
+        url.searchParams.has("imported") ? store.lastHealth : undefined,
       ),
     );
   }
@@ -297,18 +298,18 @@ async function route(store: AppStore, req: Request, url: URL, path: string): Pro
     return html(notFound("page"), 404);
   }
   if (req.method === "GET" && path === "/file") {
-    return html(fileHealthPage(store.lastReport));
+    return html(fileHealthPage(store.lastHealth));
   }
   if (req.method === "GET" && path === "/import") {
-    return html(importPage(url.searchParams.get("report") ? store.lastReport : undefined));
+    return html(importPage(url.searchParams.get("report") ? store.lastHealth : undefined));
   }
   if (req.method === "POST" && path === "/import") {
     const form = await req.formData();
     const file = form.get("file");
     if (!(file instanceof File)) return html(notFound("file"), 400);
-    const { tree, report } = importGedcom(new Uint8Array(await file.arrayBuffer()));
+    const { tree, report: health } = importGedcom(new Uint8Array(await file.arrayBuffer()));
     store.tree = tree;
-    store.lastReport = report;
+    store.lastHealth = health;
     return seeOther("/?imported=1");
   }
   if (req.method === "GET" && path === "/export") return html(exportPage(store.tree));

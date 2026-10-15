@@ -65,53 +65,30 @@ export function outlineFromLayout(tree: Tree, layout: FamilyLayout, rootId: stri
     return count;
   };
   const hiddenAncestorsOf = (id: string): number => nodeOf.get(id)?.hiddenAncestorCount ?? 0;
-  const up = (id: string, seen: Set<string>): OutlineNode => ({
+  const base = (id: string): Omit<OutlineNode, "parents" | "children"> => ({
     id,
     name: nameOf(id),
     hiddenAncestors: hiddenAncestorsOf(id),
     hiddenDescendants: countHiddenBelow(id),
-    parents: (parentsOf.get(id) ?? [])
-      .filter((pid) => placed.has(pid) && !seen.has(pid))
-      .map((pid) => {
-        seen.add(pid);
-        return up(pid, seen);
-      }),
-    children: [],
   });
-  const down = (id: string, seen: Set<string>): OutlineNode => ({
-    id,
-    name: nameOf(id),
-    hiddenAncestors: hiddenAncestorsOf(id),
-    hiddenDescendants: countHiddenBelow(id),
-    parents: [],
-    children: (kidsOf.get(id) ?? [])
-      .filter((cid) => placed.has(cid) && !seen.has(cid))
-      .map((cid) => {
-        seen.add(cid);
-        return down(cid, seen);
-      }),
+  // One builder walks up for ancestors, down for descendants, or both from
+  // the focus. The side decides which half stays empty.
+  const listFrom = (ids: string[], seen: Set<string>, side: "up" | "down"): OutlineNode[] =>
+    ids.filter((cid) => placed.has(cid) && !seen.has(cid)).map((cid) => {
+      seen.add(cid);
+      return one(cid, seen, side);
+    });
+  const one = (id: string, seen: Set<string>, side: "up" | "down"): OutlineNode => ({
+    ...base(id),
+    parents: side === "down" ? [] : listFrom(parentsOf.get(id) ?? [], seen, "up"),
+    children: side === "up" ? [] : listFrom(kidsOf.get(id) ?? [], seen, "down"),
   });
-  const focusSeenUp = new Set<string>([rootId]);
-  const focusSeenDown = new Set<string>([rootId]);
   return {
     root: rootId,
     tree: {
-      id: rootId,
-      name: nameOf(rootId),
-      hiddenAncestors: hiddenAncestorsOf(rootId),
-      hiddenDescendants: countHiddenBelow(rootId),
-      parents: (parentsOf.get(rootId) ?? [])
-        .filter((pid) => placed.has(pid) && !focusSeenUp.has(pid))
-        .map((pid) => {
-          focusSeenUp.add(pid);
-          return up(pid, focusSeenUp);
-        }),
-      children: (kidsOf.get(rootId) ?? [])
-        .filter((cid) => placed.has(cid) && !focusSeenDown.has(cid))
-        .map((cid) => {
-          focusSeenDown.add(cid);
-          return down(cid, focusSeenDown);
-        }),
+      ...base(rootId),
+      parents: listFrom(parentsOf.get(rootId) ?? [], new Set([rootId]), "up"),
+      children: listFrom(kidsOf.get(rootId) ?? [], new Set([rootId]), "down"),
     },
   };
 }

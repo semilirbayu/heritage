@@ -14,6 +14,9 @@ async function text(res: Response): Promise<string> {
   return await res.text();
 }
 
+const isPh = (n: { kind?: string }): boolean => n.kind === "placeholder";
+const personNodes = (nodes: { kind?: string }[]) => nodes.filter((n) => !isPh(n));
+
 describe("heritage app", () => {
   test("empty tree shows entry points (add person + import)", async () => {
     const { fetch } = app();
@@ -123,8 +126,10 @@ describe("heritage app", () => {
     const data = (await res.json()) as {
       nodes: { personId: string; name: string; generation: number }[];
       edges: { kind: string }[];
+      limit: number;
     };
     expect(data.nodes).toHaveLength(2);
+    expect(data.limit).toBe(500);
     expect(data.nodes.map((n) => n.name).sort()).toEqual(["Ada Lovelace", "Kid Lovelace"]);
     expect(data.edges.some((e) => e.kind === "parent")).toBe(true);
     const shallow = (await (await fetch(new Request("http://x/api/tree?depth=0"))).json()) as typeof data;
@@ -170,7 +175,7 @@ describe("heritage app", () => {
     const shallow = (await (await fetch(new Request(`http://x/api/tree?root=${rootId}&depth=1`))).json()) as {
       nodes: { kind?: string }[];
     };
-    expect(shallow.nodes.filter((n) => n.kind !== "placeholder")).toHaveLength(2);
+    expect(personNodes(shallow.nodes)).toHaveLength(2);
   });
 
   test("siblings show by default and hide with siblings=0", async () => {
@@ -225,9 +230,9 @@ describe("heritage app", () => {
     const family = store.tree.families.find((candidate) => candidate.partners.includes(root))!;
     const expanded = await (await fetch(new Request(`http://x/api/tree?root=${root}&depth=2`))).json() as { nodes: { kind?: string }[] };
     const collapsed = await (await fetch(new Request(`http://x/api/tree?root=${root}&depth=2&collapsed=${family.id}`))).json() as { nodes: { kind?: string }[] };
-    expect(expanded.nodes.filter((n) => n.kind !== "placeholder")).toHaveLength(3);
-    expect(collapsed.nodes.filter((n) => n.kind !== "placeholder")).toHaveLength(1);
-    expect(collapsed.nodes.filter((n) => n.kind === "placeholder")).toHaveLength(1);
+    expect(personNodes(expanded.nodes)).toHaveLength(3);
+    expect(personNodes(collapsed.nodes)).toHaveLength(1);
+    expect(collapsed.nodes.filter(isPh)).toHaveLength(1);
     expect(store.tree.persons).toHaveLength(3);
   });
 
@@ -463,16 +468,20 @@ describe("file health page", () => {
 });
 
 describe("navigation and hidden editing", () => {
-  test("nav reads Explore, Import, Export, File health with no edit entries", async () => {
+  test("nav shows only Explore, Import, Export; footer keeps secondary links and settings", async () => {
     const { fetch } = app();
     const body = await text(await fetch(new Request("http://x/list")));
-    const nav = /<nav[\s\S]*?<\/nav>/.exec(body)![0];
+    const nav = /<nav class="site-nav"[\s\S]*?<\/nav>/.exec(body)![0];
     expect(nav).toContain(">Explore<");
     expect(nav).toContain('href="/import"');
     expect(nav).toContain('href="/export"');
-    expect(nav).toContain('href="/file"');
+    expect(nav).not.toContain('href="/list"');
+    expect(nav).not.toContain('href="/file"');
     expect(nav).not.toContain("/person/new");
     expect(nav).not.toContain("Add");
+    expect(body).toContain('aria-label="Secondary navigation"');
+    expect(body).toContain('<a href="/file">File health</a>');
+    expect(body).toContain('aria-label="Settings"');
   });
 
   test("edit affordances are marked and hidden by default", async () => {
@@ -550,7 +559,7 @@ describe("placeholders and truncation notice", () => {
     const tree = (await (
       await fetch(new Request(`http://x/api/tree?root=${ada}&collapsed=${familyId}`))
     ).json()) as { nodes: { kind?: string; personId: string; hiddenDescendants?: number }[] };
-    const ph = tree.nodes.find((n) => n.kind === "placeholder");
+    const ph = tree.nodes.find(isPh);
     expect(ph).toBeDefined();
     expect(ph!.personId).toBe(`ph:below:${ada}`);
     expect(ph!.hiddenDescendants).toBe(1);
@@ -561,12 +570,13 @@ describe("placeholders and truncation notice", () => {
     const script = await text(await fetch(new Request("http://x/viewer.js")));
     expect(script).toContain("n.kind === 'placeholder'");
     expect(script).toContain("hiddenDescendants");
-    expect(script).toContain("Showing up to 500");
+    expect(script).toContain("data.limit");
     expect(script).toContain("depthSel");
     expect(script).toContain("siblingsBtn");
   });
 });
 
+describe("depth control", () => {
   test("the branch depth control collapses and expands to a chosen depth", async () => {
     const { fetch } = app();
     await create(fetch, "Ada", "Lovelace");
@@ -575,6 +585,7 @@ describe("placeholders and truncation notice", () => {
     expect(page).toContain('aria-label="Collapse or expand to depth"');
     expect(page).toContain('title="Collapse or expand this branch to a chosen depth"');
   });
+});
 
 describe("outline panel", () => {
   test("the outline endpoint returns the branch hierarchy with hidden counts", async () => {
@@ -636,7 +647,7 @@ describe("print to pdf", () => {
     await create(fetch, "Ada", "Lovelace");
     const page = await text(await fetch(new Request("http://x/")));
     expect(page).toContain('id="printBtn"');
-    expect(page).toContain('aria-label="Print tree"');
+    expect(page).toContain("Print / Save as PDF");
     expect(page).toContain('id="printTitle"');
     expect(page).toContain("@media print");
   });
@@ -657,7 +668,7 @@ describe("download svg", () => {
     await create(fetch, "Ada", "Lovelace");
     const page = await text(await fetch(new Request("http://x/")));
     expect(page).toContain('id="svgBtn"');
-    expect(page).toContain('aria-label="Download SVG"');
+    expect(page).toContain("Download SVG");
   });
 
   test("the viewer serializes the current view to an SVG file", async () => {
