@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createApp, type AppStore } from "../src/app/app";
+import { NODE_W } from "../src/views/family";
 import { emptyTree } from "../src/domain/tree";
+import { addParent, createPerson } from "../src/domain/tree";
 
 function app(): { store: AppStore; fetch: (req: Request) => Promise<Response> } {
   const store: AppStore = { tree: emptyTree() };
@@ -263,7 +265,7 @@ describe("heritage app", () => {
     expect(pedigree.nodes.map((n) => n.personId)).toContain(parent);
     expect(pedigree.nodes.map((n) => n.personId)).not.toContain(descendantId);
     expect(fan.view).toBe("fan");
-    expect(fan.nodeWidth).toBeLessThan(232);
+    expect(fan.nodeWidth).toBeLessThan(NODE_W);
     expect(fan.nodes.map((n) => n.personId)).toEqual(pedigree.nodes.map((n) => n.personId));
   });
 
@@ -283,6 +285,62 @@ describe("heritage app", () => {
     expect(data.name).toBe("Ada Lovelace");
     expect(data.facts).toEqual([{ type: "BIRT", date: "1815", place: undefined }]);
     expect((await fetch(new Request("http://x/api/person/ghost"))).status).toBe(404);
+  });
+
+  test("api/person serves biography, media, and the relation to the root", async () => {
+    const { store, fetch } = app();
+    const parent = createPerson({ given: "Parent", sex: "M" });
+    const root = createPerson({ given: "Root", sex: "F" });
+    const kid = {
+      ...createPerson({ given: "Kid", sex: "F" }),
+      biography: "Born at home.",
+      mediaIds: ["m1", "gone"],
+    };
+    const up = addParent({ child: root, parent });
+    const down = addParent({ child: kid, parent: up.updatedChild });
+    store.tree = {
+      ...emptyTree(),
+      persons: [up.updatedParent, down.updatedParent, down.updatedChild],
+      families: [up.family, down.family],
+      media: [
+        {
+          id: "m1",
+          path: "photos/kid.jpg",
+          title: "Kid at three",
+          dateRaw: "1900",
+          place: { raw: "Oslo" },
+        },
+      ],
+    };
+    const res = await fetch(
+      new Request(`http://x/api/person/${kid.id}?root=${root.id}`),
+    );
+    const data = (await res.json()) as {
+      relation: string;
+      biography: string;
+      mediaCount: number;
+      media: { id: string; path: string; title: string; date: string; place: string; missing?: true }[];
+    };
+    expect(data.relation).toBe("Daughter");
+    expect(data.biography).toBe("Born at home.");
+    expect(data.mediaCount).toBe(2);
+    expect(data.media[0]).toEqual({
+      id: "m1",
+      path: "photos/kid.jpg",
+      title: "Kid at three",
+      date: "1900",
+      place: "Oslo",
+    });
+    expect(data.media[1]!.missing).toBe(true);
+    const self = (await (
+      await fetch(new Request(`http://x/api/person/${root.id}?root=${root.id}`))
+    ).json()) as { relation: string; mediaCount: number };
+    expect(self.relation).toBe("Main person");
+    expect(self.mediaCount).toBe(0);
+    const layout = (await (
+      await fetch(new Request(`http://x/api/tree?root=${root.id}&depth=1`))
+    ).json()) as { nodes: { personId: string; mediaCount?: number }[] };
+    expect(layout.nodes.find((n) => n.personId === kid.id)?.mediaCount).toBe(2);
   });
 
   test("api/people searches across the whole tree with bounded suggestions", async () => {

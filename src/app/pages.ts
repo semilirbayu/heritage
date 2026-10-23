@@ -5,6 +5,7 @@
 import { personalPhoto } from "../domain/media";
 import { kinOf, preferredEvent, preferredName } from "../domain/tree";
 import type { ImportReport, Person, Tree } from "../domain/types";
+import { chartTokenCss, familyDepthChoices } from "../views/chartTokens";
 import { NODE_H, NODE_W, type TreeViewMode } from "../views/family";
 import { listPeople, yearOf, type ListQuery } from "../views/list";
 
@@ -46,6 +47,7 @@ color-scheme:light;
 --accent:#b23a2b;--accent-pale:#f7eae8;
 --sex-m:#5c87ae;--sex-f:#b5738a;--sex-m-tint:#e4ecf3;--sex-f-tint:#f3e5ea;
 --wire:#98a2ac;--canvas:#f2f3f5;--dot:#d3d8de;--fan-base:#3e5c74;
+${chartTokenCss()};
 --shadow:0 1px 2px rgba(21,26,32,.06),0 10px 28px rgba(21,26,32,.07);
 --shadow-lift:0 18px 44px rgba(21,26,32,.18);
 --r1:6px;--r2:10px;
@@ -145,15 +147,21 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .canvas-shell:fullscreen #toolbar{border-radius:var(--r2)}
 .canvas-shell:fullscreen #viewer{border-radius:0}
 #viewer{position:relative;flex:1;min-height:260px;background-color:var(--canvas);background-image:radial-gradient(var(--dot) .8px,transparent .8px);background-size:22px 22px;overflow:hidden;touch-action:none;border:1px solid var(--line);border-radius:0 0 var(--r2) var(--r2);box-shadow:var(--shadow)}
+#viewer[data-view="family"]{background-color:var(--chart-stage);background-image:none}
 #stage{display:block;width:100%;height:100%;cursor:grab}
 #stage:active{cursor:grabbing}
 #viewer .node{cursor:pointer}
-#viewer .node rect{fill:#fff;stroke:var(--line-strong);stroke-width:1.5;filter:drop-shadow(0 4px 9px rgba(21,26,32,.08))}
-#viewer .node.sex-m rect{fill:var(--sex-m-tint)}
-#viewer .node.sex-f rect{fill:var(--sex-f-tint)}
-#viewer text{font-family:var(--font-sans);fill:var(--ink)}
-#viewer .node .node-name{font-family:var(--font-display);font-weight:600;font-size:15px;fill:var(--ink)}
-#viewer .node .node-sub{fill:var(--muted);font-size:12px}
+#viewer .node rect.ped-card{fill:#fff;stroke:var(--line-strong);stroke-width:1.5;filter:drop-shadow(0 4px 9px rgba(21,26,32,.08))}
+#viewer .node.sex-m rect.ped-card{fill:var(--sex-m-tint)}
+#viewer .node.sex-f rect.ped-card{fill:var(--sex-f-tint)}
+#viewer .node rect.card{fill:#fff;stroke:var(--card-edge-unknown);stroke-width:2;filter:drop-shadow(0 4px 9px rgba(21,26,32,.08))}
+#viewer .node.sex-m rect.card{stroke:var(--card-edge-male);fill:#fff}
+#viewer .node.sex-f rect.card{stroke:var(--card-edge-female);fill:#fff}
+#viewer .node.sex-u rect.card{stroke:var(--card-edge-unknown);fill:#fff}
+#viewer .node rect.focus-ring{fill:none;stroke-width:3;filter:none}
+#viewer text{font-family:var(--chart-font);fill:var(--chart-name)}
+#viewer .node .node-name{font-family:var(--chart-font);font-weight:500;font-size:15px;fill:var(--chart-name)}
+#viewer .node .node-sub{fill:var(--chart-ink);font-size:15px;font-family:var(--chart-font)}
 #viewer .node-add{fill:var(--ink)}
 #viewer .node-add-bg{fill:#fff;stroke:var(--line-strong);stroke-width:1.25}
 #viewer .node .node-avatar-m{fill:var(--sex-m)}
@@ -162,10 +170,10 @@ button:disabled{opacity:.5;cursor:not-allowed}
 #viewer .node .node-initials-m{fill:#fff;font-weight:700}
 #viewer .node .node-initials-f{fill:#fff;font-weight:700}
 #viewer .node .node-initials-u{fill:var(--muted);font-weight:700}
-#viewer .node.focus rect{stroke:var(--ink);stroke-width:2.5;filter:drop-shadow(0 5px 13px rgba(21,26,32,.16))}
-#viewer .node.sib rect{stroke:var(--accent);stroke-width:2;stroke-dasharray:6 3}
-#viewer .node:hover rect{stroke:var(--ink);stroke-width:2}
-#viewer .node.selected rect{stroke:var(--accent);stroke-width:2.5;fill:var(--accent-pale)}
+#viewer .node.focus rect.card{stroke-width:2}
+#viewer .node.sib rect.card{stroke-width:2}
+#viewer .node:hover rect.card{stroke-width:2}
+#viewer .node.selected rect.card{stroke-width:2;fill:var(--accent-pale)}
 #viewer .node .fan-person{stroke:var(--wire);stroke-width:1.4;filter:drop-shadow(0 3px 5px rgba(21,26,32,.12))}
 #viewer .node .fan-initials{font-size:10px;font-weight:700;fill:var(--ink)}
 #viewer .node .fan-name{font-size:9px;fill:var(--muted)}
@@ -173,8 +181,8 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .canvas-status{position:absolute;left:12px;bottom:12px;display:flex;flex-wrap:wrap;gap:8px;pointer-events:none}
 .canvas-hint,.canvas-legend{display:flex;align-items:center;gap:12px;padding:7px 11px;border:1px solid var(--line);border-radius:var(--r1);background:rgba(255,255,255,.94);font-size:12px;color:var(--muted)}
 .legend-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
-.legend-dot.m{background:var(--sex-m)}
-.legend-dot.f{background:var(--sex-f)}
+.legend-dot.m{background:var(--card-edge-male)}
+.legend-dot.f{background:var(--card-edge-female)}
 #drawer{position:absolute;top:12px;left:12px;bottom:12px;width:min(340px,calc(100% - 24px));background:var(--surface);border:1px solid var(--line);border-radius:var(--r2);padding:20px;overflow:auto;box-shadow:var(--shadow-lift);z-index:2}
 .outline-panel{position:absolute;top:12px;right:12px;bottom:12px;width:min(300px,calc(100% - 24px));background:var(--surface);border:1px solid var(--line);border-radius:var(--r2);padding:16px;overflow:auto;box-shadow:var(--shadow-lift);z-index:3}
 .outline-panel[hidden]{display:none}
@@ -201,6 +209,9 @@ button:disabled{opacity:.5;cursor:not-allowed}
 #drawer h3{font-size:13px;font-weight:600;color:var(--muted);margin:20px 0 6px}
 #drawer .drawer-close{position:absolute;right:12px;top:12px}
 #drawer .drawer-fact{padding:9px 0;border-bottom:1px solid var(--line);font-size:14px}
+#drawer .relation{font-size:14px;color:var(--muted);margin:0 0 12px}
+#drawer .drawer-media{padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
+#drawer .drawer-bio{font-size:14px;line-height:1.55;white-space:pre-wrap}
 #drawer .drawer-actions{display:flex;gap:8px;margin-top:20px}
 #drawer .drawer-actions>*{flex:1}
 #viewer .branch-pill{fill:#fff;stroke:var(--line-strong);stroke-width:1.25;filter:drop-shadow(0 2px 4px rgba(21,26,32,.12))}
@@ -212,6 +223,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 #viewer .node:hover .branch-toggle,#viewer .node:focus-within .branch-toggle{opacity:1}
 .zoom-cluster{position:absolute;right:12px;bottom:12px;display:flex;flex-direction:column;gap:6px;z-index:2}
 .zoom-cluster .icon-button{box-shadow:0 4px 12px rgba(21,26,32,.14)}
+.zoom-label{display:block;text-align:center;font:600 12px/1 var(--font-sans);color:var(--muted);background:var(--surface);border:1px solid var(--line);border-radius:var(--r1);padding:8px 0;font-variant-numeric:tabular-nums;box-shadow:0 4px 12px rgba(21,26,32,.14)}
 .canvas-tip{margin:10px 2px 0;font-size:var(--fs-sm);color:var(--muted)}
 .empty-panel{max-width:820px;margin:48px auto;padding:44px;display:grid;grid-template-columns:1fr 240px;gap:36px;align-items:center}
 .empty-illustration{height:180px;display:grid;place-items:center;background:var(--surface-alt);border:1px solid var(--line);border-radius:var(--r2)}
@@ -313,6 +325,7 @@ export function familyPage(
   siblingPersonIds: ReadonlySet<string> = new Set(),
   view: TreeViewMode = "family",
   minimizedAncestorIds: ReadonlySet<string> = new Set(),
+  showCousins = true,
   importedHealth: ImportReport | undefined = undefined,
 ): string {
   if (tree.persons.length === 0) {
@@ -344,21 +357,15 @@ export function familyPage(
     );
   }
   const root = rootId && tree.persons.some((p) => p.id === rootId) ? rootId : tree.persons[0]!.id;
-  const depthValue = depth === undefined ? (view === "family" ? "all" : "5") : Number.isFinite(depth) ? String(depth) : "all";
+  const depthValue = depth === undefined ? "5" : Number.isFinite(depth) ? String(depth) : "all";
   const depthOptions = view === "family"
-    ? ["1", "2", "3", "4", "5", "6", "12", "all"]
-    : view === "fan"
+    ? familyDepthChoices(depthValue)
+    : (view === "fan"
       ? ["3", "4", "5", "6", "7", "8", "9"]
-      : ["1", "2", "3", "4", "5", "11", "all"];
+      : ["1", "2", "3", "4", "5", "11", "all"]
+    ).map((d) => ({ value: d, label: d === "all" ? "All generations" : `${Number(d) + 1} generations` }));
   const depths = depthOptions
-    .map((d) => {
-      const label = d === "all"
-        ? "All generations"
-        : view === "family"
-          ? d + (d === "1" ? " generation" : " generations")
-          : `${Number(d) + 1} generations`;
-      return `<option value="${d}"${depthValue === d ? " selected" : ""}>${label}</option>`;
-    })
+    .map((d) => `<option value="${d.value}"${depthValue === d.value ? " selected" : ""}>${d.label}</option>`)
     .join("");
   const rootPerson = tree.persons.find((p) => p.id === root)!;
   const siblingCount = view === "family" ? new Set(
@@ -378,6 +385,7 @@ export function familyPage(
       <span class="tb-label">Branch <strong id="rootName">${esc(preferredName(rootPerson))}</strong></span>
       <label><span class="tb-cap">Generations</span><select id="depthSel" aria-label="Collapse or expand to depth" title="Collapse or expand this branch to a chosen depth">${depths}</select></label>
       <button id="siblingsBtn" class="secondary" type="button"${siblingCount ? "" : " hidden"} aria-pressed="${showSiblings}">${showSiblings ? "Hide siblings" : `Show siblings (${siblingCount})`}</button>
+      <label class="check-option cousins-toggle"><input id="cousinsBtn" type="checkbox"${showCousins ? " checked" : ""}><span>Show cousins</span></label>
       <span class="control-divider"></span>
       <label class="toolbar-search">${icon("search", 16)}<input id="treeSearch" type="search" placeholder="Search everyone" aria-label="Search everyone in the tree" autocomplete="off"><div id="personSuggestions" class="person-suggestions" role="listbox" hidden></div></label>
       <span class="toolbar-count" id="counts" aria-live="polite"></span>
@@ -394,11 +402,12 @@ export function familyPage(
       </div>
     </div>
     <p id="treeNotice" class="tree-notice" hidden></p>
-    <div id="viewer" data-root="${esc(root)}" data-view="${view}" data-depth="${depthValue}" data-collapsed="${esc([...collapsedFamilyIds].join(","))}" data-expanded="${esc([...expandedAncestorIds].join(","))}" data-minimized="${esc([...minimizedAncestorIds].join(","))}" data-siblings="${showSiblings ? "1" : "0"}" data-sibexp="${esc([...siblingPersonIds].join(","))}" data-w="${NODE_W}" data-h="${NODE_H}">
+    <div id="viewer" data-root="${esc(root)}" data-view="${view}" data-depth="${depthValue}" data-collapsed="${esc([...collapsedFamilyIds].join(","))}" data-expanded="${esc([...expandedAncestorIds].join(","))}" data-minimized="${esc([...minimizedAncestorIds].join(","))}" data-siblings="${showSiblings ? "1" : "0"}" data-cousins="${showCousins ? "1" : "0"}" data-sibexp="${esc([...siblingPersonIds].join(","))}" data-w="${NODE_W}" data-h="${NODE_H}">
       <svg id="stage" role="img" aria-label="family tree"></svg>
       <aside id="drawer" hidden aria-label="person details"></aside>
       <aside id="outline" class="outline-panel" hidden aria-label="Branch outline"></aside>
       <div class="zoom-cluster" role="toolbar" aria-label="Zoom controls">
+        <span id="zoomLabel" class="zoom-label" title="Zoom level">100%</span>
         <button id="zoomIn" class="icon-button" type="button" aria-label="Zoom in">${icon("plus")}</button>
         <button id="zoomOut" class="icon-button" type="button" aria-label="Zoom out">${icon("minus")}</button>
         <button id="homeBtn" class="icon-button" type="button" aria-label="Center on main person at normal zoom" title="Center on main person">${icon("home")}</button>

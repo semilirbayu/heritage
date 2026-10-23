@@ -1,6 +1,9 @@
 // Interactive tree viewer client script. Served at GET /viewer.js so the
 // viewer page ships a file instead of one inline blob (ticket 01).
+import { chartTokens, PENCIL_PATH } from "../views/chartTokens";
 import { BUILD_ID } from "./pages";
+
+const CHART_JS = JSON.stringify({ ...chartTokens, pencil: PENCIL_PATH });
 
 export const VIEWER_JS = `(() => {
 const mount = document.getElementById('viewer');
@@ -21,6 +24,7 @@ const ICON_COLLAPSE = ICON_SVG + '<path d="M4 14h6v6"/><path d="M20 10h-6V4"/><p
 // SVG wires and fan ramp can never drift from the stylesheet palette.
 const rootStyle = getComputedStyle(document.documentElement);
 const token = (name, fallback) => (rootStyle.getPropertyValue(name) || '').trim() || fallback;
+const CHART = ${CHART_JS};
 const WIRE = token('--wire', '#98a2ac');
 const mixWhite = (hex, t) => {
   const m = /^#([0-9a-f]{6})$/i.exec(hex);
@@ -37,6 +41,7 @@ let expandedAncestors = new Set((mount.dataset.expanded || '').split(',').filter
 let sibExpanded = new Set((mount.dataset.sibexp || '').split(',').filter(Boolean));
 let minimizedAncestors = new Set((mount.dataset.minimized || '').split(',').filter(Boolean));
 let showSiblings = mount.dataset.siblings === '1';
+let showCousins = mount.dataset.cousins !== '0';
 let nodes = [], edges = [], buses = [], worldW = 1, worldH = 1, totalPeople = 0;
 let scale = 1, tx = 0, ty = 0, selected = null, highlightIds = new Set();
 const settingsKey = 'heritage-viewer-settings';
@@ -45,7 +50,19 @@ let settings = { showPhotos: false, showYears: true };
 try { Object.assign(settings, JSON.parse(localStorage.getItem(settingsKey) || '{}')); } catch {}
 delete settings.defaultView;
 const saveSettings = () => { try { localStorage.setItem(settingsKey, JSON.stringify(settings)); } catch {} };
-const apply = () => viewport.setAttribute('transform', 'translate(' + tx + ' ' + ty + ') scale(' + scale + ')');
+let lastTier = '';
+let forceFull = false;
+const zoomPercent = (s) => Math.round((s / CHART.initialScale) * 100);
+const tierAt = (s) => { const p = zoomPercent(s); return p <= CHART.compactBelowPercent ? 'compact' : p <= CHART.datesBelowPercent ? 'mid' : 'full'; };
+const apply = () => {
+  viewport.setAttribute('transform', 'translate(' + tx + ' ' + ty + ') scale(' + scale + ')');
+  const zoomLabel = document.getElementById('zoomLabel');
+  if (zoomLabel) zoomLabel.textContent = zoomPercent(scale) + '%';
+  // A tier change is a redraw, not a transform change. draw sets
+  // lastTier before it calls apply, so this cannot recurse.
+  const tier = forceFull ? 'full' : tierAt(scale);
+  if (tier !== lastTier) { lastTier = tier; draw(); }
+};
 let viewport;
 const el = (tag, attrs, text) => {
   const n = document.createElementNS(NS, tag);
@@ -53,6 +70,22 @@ const el = (tag, attrs, text) => {
   if (text !== undefined) n.textContent = text;
   return n;
 };
+function peopleLabel() {
+  const shown = nodes.filter(n => !n.kind).length;
+  const noun = totalPeople === 1 ? 'person' : 'people';
+  return shown + ' of ' + totalPeople + ' ' + noun;
+}
+function syncDepthOption(value) {
+  const sel = document.getElementById('depthSel');
+  if (!sel) return;
+  if (![...sel.options].some(o => o.value === value)) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = value;
+    sel.appendChild(opt);
+  }
+  sel.value = value;
+}
 function focusBranch(id, name, afterLoad) {
   root = id;
   rootName.textContent = name;
@@ -101,6 +134,7 @@ async function load(syncUrl, recenter) {
   if (minimizedAncestors.size) q.set('min', [...minimizedAncestors].join(','));
   if (sibExpanded.size) q.set('siblingsOf', [...sibExpanded].join(','));
   q.set('siblings', showSiblings ? '1' : '0');
+  q.set('cousins', showCousins ? '1' : '0');
   q.set('years', settings.showYears ? '1' : '0');
   q.set('photos', settings.showPhotos ? '1' : '0');
   if (syncUrl !== false) {
@@ -113,6 +147,7 @@ async function load(syncUrl, recenter) {
     if (minimizedAncestors.size) url.searchParams.set('min', [...minimizedAncestors].join(',')); else url.searchParams.delete('min');
     if (sibExpanded.size) url.searchParams.set('siblingsOf', [...sibExpanded].join(',')); else url.searchParams.delete('siblingsOf');
     url.searchParams.set('siblings', showSiblings ? '1' : '0');
+    url.searchParams.set('cousins', showCousins ? '1' : '0');
     url.searchParams.set('years', settings.showYears ? '1' : '0');
     url.searchParams.set('photos', settings.showPhotos ? '1' : '0');
     history.replaceState(null, '', url);
@@ -149,7 +184,7 @@ async function load(syncUrl, recenter) {
   } else {
     notice.hidden = true;
   }
-  counts.textContent = nodes.filter(n => !n.kind).length + ' people shown';
+  counts.textContent = peopleLabel();
   draw();
   lastTreeQuery = q.toString();
   if (outlinePanel && !outlinePanel.hidden) refreshOutline();
@@ -207,19 +242,36 @@ function draw() {
   viewport = el('g', {});
   svg.appendChild(viewport);
   const byId = new Map(nodes.map(n => [n.personId, n]));
-  // MyHeritage Family-view wiring: spouses read as a couple by proximity
-  // (no bar between cards); children hang off a horizontal bus dropped
-  // from the parents' midpoint. Every corner is rounded (radius R) exactly
-  // like MyHeritage — the server precomputes bus geometry, we fillet here.
-  // WIRE is the shared connector token (see top of viewer).
-  // Generous MyHeritage-like corner radius (~0.09 × card width). Crowded
-  // ends (a kid within one diameter of the drop) stay straight instead.
+  // Detail tiers measured on MyHeritage: full >= 85%, mid 42-71% (no
+  // dates), compact <= 28% (name only). Wires widen in compact mode so
+  // the structure stays readable. draw owns lastTier before apply.
+  const tier = forceFull ? 'full' : tierAt(scale);
+  lastTier = tier;
+  const compact = tier === 'compact';
+  const wire = compact ? CHART.wireLowZoom : CHART.wire;
+  const wireW = compact ? CHART.wireLowZoomWidth : CHART.wireWidth;
+  // Family wires are 1px and square. Fan curves stay on the shared wire token.
+  // The server precomputes bus geometry. Lines are drawn before cards.
   const R = 20;
   const sameX = (a, b) => Math.abs(a - b) < 0.01;
-  const path = (d) => viewport.appendChild(el('path', { d, fill: 'none', stroke: WIRE, 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+  const path = (d, stroke, width) => viewport.appendChild(el('path', {
+    d,
+    fill: 'none',
+    stroke: stroke || (currentView === 'family' ? wire : WIRE),
+    'stroke-width': width || (currentView === 'family' ? wireW : 2),
+    'stroke-linecap': currentView === 'family' ? 'butt' : 'round',
+    'stroke-linejoin': currentView === 'family' ? 'miter' : 'round',
+  }));
   for (const e of edges) {
     const a = byId.get(e.from), b = byId.get(e.to);
     if (!a || !b) continue;
+    if (currentView === 'family' && e.kind === 'partner') {
+      const left = a.x <= b.x ? a : b;
+      const right = a.x <= b.x ? b : a;
+      const y = left.y + (left.h || H) / 2;
+      path('M' + (left.x + W) + ' ' + y + ' H' + right.x, CHART.coupleLink, CHART.coupleLinkWidth);
+      continue;
+    }
     if (currentView === 'fan') {
       const x1 = a.x + W / 2, y1 = a.y + H / 2, x2 = b.x + W / 2, y2 = b.y + H / 2;
       viewport.appendChild(el('path', { d: 'M' + x1 + ' ' + y1 + ' Q' + (worldW / 2) + ' ' + (worldH - H / 2) + ' ' + x2 + ' ' + y2, fill: 'none', stroke: WIRE, 'stroke-width': 1.25 }));
@@ -235,6 +287,17 @@ function draw() {
     }
   }
   for (const b of buses) {
+    if (currentView === 'family') {
+      const legs = Array.isArray(b.legs) && b.legs.length ? [...b.legs].sort((p, q) => p - q) : [b.x];
+      const pbot = typeof b.pbot === 'number' ? b.pbot : b.top;
+      const span = [...legs, ...b.kids];
+      const left = Math.min(...span), right = Math.max(...span);
+      for (const lx of legs) path('M' + lx + ' ' + pbot + ' V' + b.bus, wire, wireW);
+      if (!sameX(left, right)) path('M' + left + ' ' + b.bus + ' H' + right, wire, wireW);
+      else path('M' + left + ' ' + Math.min(pbot, b.kidTop) + ' V' + Math.max(pbot, b.kidTop), wire, wireW);
+      for (const kx of b.kids) path('M' + kx + ' ' + b.bus + ' V' + b.kidTop, wire, wireW);
+      continue;
+    }
     const legs = Array.isArray(b.legs) && b.legs.length ? [...b.legs].sort((p, q) => p - q) : [b.x];
     const pbot = typeof b.pbot === 'number' ? b.pbot : b.top;
     const span = [...legs, ...b.kids];
@@ -279,7 +342,7 @@ function draw() {
   const matchCount = search ? nodes.filter(n => n.name && n.name.toLowerCase().includes(search)).length : nodes.length;
   counts.textContent = search
     ? (matchCount ? matchCount + ' match' + (matchCount === 1 ? '' : 'es') : 'No matches') + ' · ' + totalPeople + ' in tree'
-    : nodes.filter(n => !n.kind).length + ' shown · ' + totalPeople + ' in tree';
+    : peopleLabel();
   for (const n of nodes) {
     // Placeholder cards stand in for a hidden branch: dashed outline, the
     // branch's display name and both hidden counts. Click expands the cut.
@@ -302,6 +365,7 @@ function draw() {
           (n.branchFamilyIds || []).forEach(id => collapsed.delete(id));
         } else if (n.atDepthLimit && depth && Number.isFinite(Number(depth))) {
           depth = String(Math.min(12, Number(depth) + 1));
+          syncDepthOption(depth);
         }
         load();
       };
@@ -313,7 +377,8 @@ function draw() {
     }
     const matches = !search || n.name.toLowerCase().includes(search);
     const sexCls = n.sex === 'M' ? 'sex-m' : n.sex === 'F' ? 'sex-f' : 'sex-u';
-    const g = el('g', { class: 'node ' + sexCls + (selected === n.personId ? ' selected' : '') + (n.isFocus ? ' focus' : '') + (highlightIds.has(n.personId) ? ' sib' : '') + (!matches ? ' dimmed' : ''), tabindex: '0', role: 'button', 'aria-label': n.name });
+    const mediaLabel = n.mediaCount ? ' — ' + n.mediaCount + ' media item' + (n.mediaCount === 1 ? '' : 's') : '';
+    const g = el('g', { class: 'node ' + sexCls + (selected === n.personId ? ' selected' : '') + (n.isFocus ? ' focus' : '') + (highlightIds.has(n.personId) ? ' sib' : '') + (!matches ? ' dimmed' : '') + (tier === 'full' ? '' : ' tier-' + tier), tabindex: '0', role: 'button', 'aria-label': n.name + mediaLabel });
     if (currentView === 'fan') {
       const fanColors = FAN_RAMP;
       const radius = Math.min(W, H) * 0.34;
@@ -326,11 +391,63 @@ function draw() {
       const shortName = n.name.split(/\\s+/).filter(Boolean).slice(-1)[0] || n.name;
       g.appendChild(el('text', { class: 'fan-name', x: cx, y: cy + radius + 14, 'font-size': 9, 'text-anchor': 'middle' }, shortName.length > 12 ? shortName.slice(0, 11) + '…' : shortName));
       g.appendChild(el('title', {}, n.name));
+    } else if (currentView === 'family') {
+      const nh = n.h || H;
+      const edge = n.sex === 'F' ? CHART.edgeFemale : CHART.edgeUnknown;
+      if (n.isFocus) {
+        const rw = CHART.focusRingWidth;
+        g.appendChild(el('rect', { class: 'focus-ring', x: n.x - rw, y: n.y - rw, width: W + rw * 2, height: nh + rw * 2, rx: CHART.radius + rw, fill: 'none', stroke: edge, 'stroke-width': rw, 'pointer-events': 'none' }));
+      }
+      g.appendChild(el('rect', { class: 'card', x: n.x, y: n.y, width: W, height: nh, rx: CHART.radius, fill: CHART.cardFill, stroke: edge, 'stroke-width': CHART.edgeWidth }));
+      const photo = CHART.photo;
+      const avatarX = n.x + CHART.photoX + photo / 2;
+      const avatarY = n.y + CHART.photoY + photo / 2;
+      const initials = n.name.split(/\\s+/).filter(Boolean).slice(0, 2).map(part => part[0]).join('').toUpperCase();
+      if (!compact) {
+        g.appendChild(el('circle', { class: 'photo', cx: avatarX, cy: avatarY, r: photo / 2, fill: CHART.photoFill }));
+        if (settings.showPhotos && n.photo && new RegExp('^https?://', 'i').test(n.photo)) {
+          const clipId = 'photo-' + String(n.personId).replace(/[^a-zA-Z0-9_-]/g, '');
+          let defs = viewport.querySelector('defs');
+          if (!defs) { defs = el('defs', {}); viewport.insertBefore(defs, viewport.firstChild); }
+          const clip = el('clipPath', { id: clipId });
+          clip.appendChild(el('circle', { cx: avatarX, cy: avatarY, r: photo / 2 }));
+          defs.appendChild(clip);
+          g.appendChild(el('image', { href: n.photo, x: avatarX - photo / 2, y: avatarY - photo / 2, width: photo, height: photo, preserveAspectRatio: 'xMidYMid slice', 'clip-path': 'url(#' + clipId + ')' }));
+        } else {
+          g.appendChild(el('text', { class: 'initials', x: avatarX, y: avatarY + 5, 'font-size': 18, 'text-anchor': 'middle', fill: CHART.ink }, initials || '?'));
+        }
+        // Media badge: a local camera mark, not a copied icon. It keeps a
+        // 7:1 contrast on white and sits just inside the photo edge.
+        if (settings.showPhotos && n.mediaCount) {
+          const bx = avatarX + 17.5, by = avatarY + 17.5;
+          const badge = el('g', { class: 'media-badge', 'aria-hidden': 'true' });
+          badge.appendChild(el('circle', { cx: bx, cy: by, r: 7, fill: '#FFFFFF', stroke: CHART.ink, 'stroke-width': 1 }));
+          badge.appendChild(el('path', { d: 'M-3.5 -1.5h1.8l.8-1.2h1.8l.8 1.2h1.8v4.5h-7z', transform: 'translate(' + bx + ' ' + by + ')', fill: CHART.ink }));
+          badge.appendChild(el('circle', { cx: bx, cy: by + 0.6, r: 1.4, fill: '#FFFFFF' }));
+          g.appendChild(badge);
+        }
+      }
+      const textX = compact ? n.x + CHART.textPad : n.x + CHART.textX;
+      const nameLines = (Array.isArray(n.nameLines) && n.nameLines.length ? n.nameLines : [n.name]).slice(0, 2);
+      // Compact cards center the name in the same box, so the layout and
+      // the pan stay still while the anatomy drops away.
+      const nameTop = compact ? n.y + nh / 2 + 5 - (nameLines.length - 1) * 9 : n.y + 40;
+      nameLines.forEach((line, i) => {
+        g.appendChild(el('text', { class: 'node-name', x: textX, y: nameTop + i * 18, 'font-size': CHART.nameSize, 'font-weight': CHART.nameWeight, 'font-family': CHART.font, fill: CHART.nameInk }, line));
+      });
+      g.appendChild(el('title', {}, n.name + mediaLabel));
+      if (settings.showYears && tier === 'full') {
+        const years = [n.birthYear, n.deathYear].filter(Boolean).join(' – ');
+        g.appendChild(el('text', { class: 'node-sub', x: textX, y: n.y + 40 + nameLines.length * 18 + 6, 'font-size': CHART.dateSize, 'font-family': CHART.font, fill: CHART.ink }, years || (!n.living ? 'Deceased' : 'Living')));
+      }
+      if (!compact) {
+        const edit = el('g', { class: 'edit', role: 'img', 'aria-label': 'Edit ' + n.name, focusable: 'false' });
+        edit.appendChild(el('path', { d: CHART.pencil, fill: CHART.ink, transform: 'translate(' + (n.x + CHART.editX) + ' ' + (n.y + CHART.editY) + ')' }));
+        g.appendChild(edit);
+      }
     } else {
       const nh = n.h || H;
-      g.appendChild(el('rect', { x: n.x, y: n.y, width: W, height: nh, rx: 8, class: n.isFocus ? 'focus-card' : '' }));
-      // MyHeritage horizontal cards: name (+ years) only when photos are
-      // off; round avatar left of the text when photos are on.
+      g.appendChild(el('rect', { class: 'ped-card', x: n.x, y: n.y, width: W, height: nh, rx: 8 }));
       let textX = n.x + 12;
       if (settings.showPhotos) {
         const avatarSize = Math.min(44, nh - 16);
@@ -340,9 +457,9 @@ function draw() {
         if (n.photo && new RegExp('^https?://', 'i').test(n.photo)) {
           g.appendChild(el('image', { href: n.photo, x: avatarX - avatarSize / 2, y: avatarY - avatarSize / 2, width: avatarSize, height: avatarSize, preserveAspectRatio: 'xMidYMid slice' }));
         } else {
-          const initials = n.name.split(/\\s+/).filter(Boolean).slice(0, 2).map(part => part[0]).join('').toUpperCase();
+          const pedInitials = n.name.split(/\\s+/).filter(Boolean).slice(0, 2).map(part => part[0]).join('').toUpperCase();
           g.appendChild(el('circle', { class: 'node-avatar-' + avKind, cx: avatarX, cy: avatarY, r: avatarSize / 2 }));
-          g.appendChild(el('text', { class: 'node-initials-' + avKind, x: avatarX, y: avatarY + 4.5, 'font-size': 13, 'text-anchor': 'middle' }, initials || '?'));
+          g.appendChild(el('text', { class: 'node-initials-' + avKind, x: avatarX, y: avatarY + 4.5, 'font-size': 13, 'text-anchor': 'middle' }, pedInitials || '?'));
         }
         textX = n.x + avatarSize + 24;
       }
@@ -368,6 +485,22 @@ function draw() {
       min.addEventListener('pointerdown', ev => ev.stopPropagation());
       g.appendChild(min);
     }
+    if (n.hasDescendants && currentView === 'family' && (n.collapsed || n.atDepthLimit)) {
+      const plus = el('a', { href: '#', role: 'button', 'aria-label': 'Expand branch of ' + n.name, title: 'Expand this branch', class: 'branch-toggle always' });
+      plus.appendChild(el('circle', { class: 'node-add-bg', cx: n.x + W / 2, cy: n.y + (n.h || H) + 14, r: 11 }));
+      plus.appendChild(el('text', { class: 'node-add', x: n.x + W / 2, y: n.y + (n.h || H) + 19, 'font-size': 14, 'text-anchor': 'middle' }, '+'));
+      plus.addEventListener('click', ev => {
+        ev.preventDefault(); ev.stopPropagation();
+        if (n.collapsed) (n.branchFamilyIds || []).forEach(id => collapsed.delete(id));
+        else if (n.atDepthLimit && depth && Number.isFinite(Number(depth))) {
+          depth = String(Math.min(12, Number(depth) + 1));
+          syncDepthOption(depth);
+        }
+        load();
+      });
+      plus.addEventListener('pointerdown', ev => ev.stopPropagation());
+      g.appendChild(plus);
+    }
     // Minimize a shown parent line: "−" hides it upstream; the layout
     // replaces it with an ancestor placeholder that expands independently
     // per line (no accordion).
@@ -385,6 +518,22 @@ function draw() {
     g.addEventListener('dblclick', ev => { ev.stopPropagation(); focusBranch(n.personId, n.name); });
     viewport.appendChild(g);
   }
+  if (currentView === 'family' && !compact) {
+    for (const e of edges) {
+      if (e.kind !== 'partner') continue;
+      const a = byId.get(e.from), b = byId.get(e.to);
+      if (!a || !b || a.kind || b.kind) continue;
+      const left = a.x <= b.x ? a : b;
+      const right = a.x <= b.x ? b : a;
+      const mid = (left.x + W + right.x) / 2;
+      const pair = CHART.pillW * 2 + CHART.pillGap;
+      const x0 = mid - pair / 2;
+      const y0 = left.y - CHART.pillH / 2;
+      const pill = (x) => viewport.appendChild(el('rect', { class: 'couple-pill', x: x, y: y0, width: CHART.pillW, height: CHART.pillH, rx: CHART.pillRadius, fill: CHART.coupleLink }));
+      pill(x0);
+      pill(x0 + CHART.pillW + CHART.pillGap);
+    }
+  }
   apply();
 }
 function fit() {
@@ -398,7 +547,7 @@ function fit() {
 function centerOnRoot() {
   const r = svg.getBoundingClientRect();
   const me = nodes.find(n => n.personId === root) || nodes.find(n => n.isFocus);
-  scale = 1;
+  scale = currentView === 'family' ? CHART.initialScale : 1;
   const cx = me ? me.x + W / 2 : worldW / 2;
   const cy = me ? me.y + (me.h || H) / 2 : worldH / 2;
   tx = r.width / 2 - cx * scale; ty = r.height / 2 - cy * scale;
@@ -427,7 +576,7 @@ async function select(id) {
     }
   }
   draw();
-  const res = await fetch('/api/person/' + encodeURIComponent(id));
+  const res = await fetch('/api/person/' + encodeURIComponent(id) + (root ? '?root=' + encodeURIComponent(root) : ''));
   if (!res.ok) return;
   const p = await res.json();
   // Trace the immediate family by id: parents, partners, children, plus
@@ -446,6 +595,10 @@ async function select(id) {
   const meta = document.createElement('p'); meta.className = 'muted';
   meta.textContent = [p.sex, p.living ? 'living' : 'deceased', [p.birthYear, p.deathYear].filter(Boolean).join('–')].filter(Boolean).join(' · ');
   drawer.appendChild(meta);
+  if (p.relation) {
+    const relationLine = document.createElement('p'); relationLine.className = 'relation'; relationLine.textContent = p.relation;
+    drawer.appendChild(relationLine);
+  }
   const factTitle = document.createElement('h3'); factTitle.textContent = 'Life events'; drawer.appendChild(factTitle);
   const ul = document.createElement('div');
   for (const f of p.facts) {
@@ -455,6 +608,28 @@ async function select(id) {
   }
   if (!p.facts.length) { const li = document.createElement('div'); li.className = 'drawer-fact muted'; li.textContent = 'No life events yet'; ul.appendChild(li); }
   drawer.appendChild(ul);
+  // Read-only media and biography. A section hides when the file has no
+  // data, so the panel never shows a dead "Add" control.
+  if (p.media && p.media.length) {
+    const mediaTitle = document.createElement('h3'); mediaTitle.textContent = 'Photos and videos'; drawer.appendChild(mediaTitle);
+    const mediaList = document.createElement('div');
+    for (const m of p.media) {
+      const row = document.createElement('div'); row.className = 'drawer-media';
+      const name = document.createElement('div');
+      if (m.missing) { name.textContent = 'Link not found'; name.className = 'muted'; }
+      else name.textContent = m.title || (m.path || '').split('/').pop() || 'Media item';
+      row.appendChild(name);
+      const metaLine = [m.date, m.place].filter(Boolean).join(' · ');
+      if (metaLine) { const sub = document.createElement('div'); sub.className = 'muted'; sub.textContent = metaLine; row.appendChild(sub); }
+      mediaList.appendChild(row);
+    }
+    drawer.appendChild(mediaList);
+  }
+  if (p.biography && p.biography.trim()) {
+    const bioTitle = document.createElement('h3'); bioTitle.textContent = 'Biography'; drawer.appendChild(bioTitle);
+    const bio = document.createElement('div'); bio.className = 'drawer-bio'; bio.textContent = p.biography;
+    drawer.appendChild(bio);
+  }
   const rel = (title, list) => {
     const h3 = document.createElement('h3'); h3.textContent = title; drawer.appendChild(h3);
     const d = document.createElement('div');
@@ -564,6 +739,9 @@ const printBtn = document.getElementById('printBtn');
 const printTitle = document.getElementById('printTitle');
 const printMedia = window.matchMedia('print');
 if (printMedia.addEventListener) printMedia.addEventListener('change', ev => { if (ev.matches) fit(); });
+// Paper and SVG files keep the full card even when the screen is compact.
+window.addEventListener('beforeprint', () => { forceFull = true; draw(); });
+window.addEventListener('afterprint', () => { forceFull = false; draw(); });
 printBtn.addEventListener('click', () => {
   const prevSearch = personSearch.value;
   const prevZoom = { scale, tx, ty };
@@ -582,6 +760,8 @@ printBtn.addEventListener('click', () => {
 // stylesheet does not travel with the file), reset pan and zoom, download.
 // The search stays as it is, so the file matches the current view exactly.
 document.getElementById('svgBtn').addEventListener('click', () => {
+  // Export the full card anatomy even when the screen is zoomed out.
+  forceFull = true; draw();
   const clone = svg.cloneNode(true);
   const srcEls = svg.querySelectorAll('*');
   const dstEls = clone.querySelectorAll('*');
@@ -611,8 +791,11 @@ document.getElementById('svgBtn').addEventListener('click', () => {
   a.click();
   a.remove();
   URL.revokeObjectURL(a.href);
+  forceFull = false; draw();
 });
 document.getElementById('siblingsBtn').addEventListener('click', () => { showSiblings = !showSiblings; load(); });
+const cousinsBtn = document.getElementById('cousinsBtn');
+if (cousinsBtn) cousinsBtn.addEventListener('change', ev => { showCousins = ev.target.checked; load(); });
 personSearch.addEventListener('input', () => {
   draw(); clearTimeout(searchTimer);
   searchTimer = setTimeout(() => searchPeople(personSearch.value), 180);

@@ -16,6 +16,7 @@ import {
   deleteFact,
   detachChild,
   detachPartner,
+  relationLabel,
   updatePerson,
 } from "../domain/tree";
 import type { Family, ImportReport, Person, Tree } from "../domain/types";
@@ -32,6 +33,7 @@ import {
   notFound,
   personPage,
 } from "./pages";
+import { FAMILY_DEFAULT_DEPTH } from "../views/chartTokens";
 import { familyLayout, MAX_VISIBLE_PEOPLE, type FamilyLayout, type TreeViewMode, wrapDisplayName } from "../views/family";
 import { outlineFromLayout } from "../views/outline";
 import { kinOf, preferredEvent, preferredName } from "../domain/tree";
@@ -98,8 +100,8 @@ function parseView(url: URL): TreeViewMode {
 
 function parseDepth(url: URL, view: TreeViewMode): { depth: number } {
   const raw = url.searchParams.get("depth");
-  if (raw === null) return { depth: view === "family" ? Number.POSITIVE_INFINITY : 5 };
-  if (raw === "") return { depth: view === "family" ? Number.POSITIVE_INFINITY : 5 };
+  const opened = view === "family" ? FAMILY_DEFAULT_DEPTH : 5;
+  if (raw === null || raw === "") return { depth: opened };
   if (raw === "all") return { depth: Number.POSITIVE_INFINITY };
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 0) return { depth: view === "family" ? Number.POSITIVE_INFINITY : 5 };
@@ -138,6 +140,7 @@ function personSummary(tree: Tree, p: Person): Record<string, unknown> {
     birthYear: yearOf(birth?.dateRaw),
     deathYear: yearOf(death?.dateRaw),
     photo: personalPhoto(p, tree)?.path,
+    mediaCount: p.mediaIds.length,
   };
 }
 
@@ -151,6 +154,7 @@ function layoutFromUrl(store: AppStore, url: URL): { root: string; layout: Famil
     expandedAncestorIds: parseIdSet(url, "expand"),
     minimizedAncestorIds: parseIdSet(url, "min"),
     showSiblings: parseSiblings(url),
+    showCousins: parseFlag(url, "cousins", true),
     siblingPersonIds: parseIdSet(url, "siblingsOf"),
     showYears: parseFlag(url, "years", true),
     showPhotos: parseFlag(url, "photos", false),
@@ -240,8 +244,20 @@ async function route(store: AppStore, req: Request, url: URL, path: string): Pro
       const fam = store.tree.families.find((f) => f.id === link.familyId);
       for (const child of fam?.children ?? []) if (child !== p.id) siblingIds.add(child);
     }
+    const rootId = url.searchParams.get("root");
+    const relation =
+      rootId && store.tree.persons.some((q) => q.id === rootId)
+        ? relationLabel(store.tree, rootId, p.id)
+        : undefined;
     return json({
       ...personSummary(store.tree, p),
+      ...(relation ? { relation } : {}),
+      biography: p.biography,
+      media: p.mediaIds.map((id) => {
+        const m = store.tree.media.find((q) => q.id === id);
+        if (!m) return { id, path: "", title: "", date: "", place: "", missing: true };
+        return { id: m.id, path: m.path, title: m.title ?? "", date: m.dateRaw ?? "", place: m.place?.raw ?? "" };
+      }),
       facts: p.events.map((e) => ({ type: e.type, date: e.dateRaw, place: e.place?.raw })),
       parents: kin.parents.map(brief),
       partners: kin.partners.map(brief),
@@ -263,6 +279,7 @@ async function route(store: AppStore, req: Request, url: URL, path: string): Pro
         parseIdSet(url, "siblingsOf"),
         view,
         parseIdSet(url, "min"),
+        parseFlag(url, "cousins", true),
         url.searchParams.has("imported") ? store.lastHealth : undefined,
       ),
     );

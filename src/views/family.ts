@@ -4,6 +4,9 @@
 
 import type { Tree } from "../domain/types";
 import { preferredName } from "../domain/tree";
+import { chartTokens, NAME_LINE_CHARS, peopleCountLabel } from "./chartTokens";
+
+export { peopleCountLabel };
 
 export type TreeViewMode = "family" | "pedigree" | "fan";
 
@@ -88,44 +91,45 @@ export interface FamilyLayout {
   view: TreeViewMode;
 }
 
-export const NODE_W = 232;
-export const NODE_H = 88;
+export const NODE_W = chartTokens.cardW;
+export const NODE_H = chartTokens.cardH;
+/** Partner gap. The partner pitch is `NODE_W + COUPLE_GAP` (254). */
+export const COUPLE_GAP = chartTokens.coupleGap;
 /**
- * Measured off MyHeritage for this exact tree (card 220 world units):
- * partners sit tight (world gap ~34), sibling/unit boundaries breathe
- * wider (world gap ~57). Scaled to our 232-wide cards: 32 vs 56.
+ * Base sibling gap. Tight sibling pitch is `NODE_W + X_GAP` (254).
+ * A wide sibling unit may breathe up to 289 when its subtree needs room.
+ * The gap never drops below this value.
  */
-export const COUPLE_GAP = 32;
-export const X_GAP = 56;
-export const Y_GAP = 72;
+export const X_GAP = chartTokens.siblingGap;
+/** Generation gap. The generation pitch is `NODE_H + Y_GAP` (188). */
+export const Y_GAP = chartTokens.generationGap;
 /** Pitch between partners inside one couple. */
 export const COUPLE_PITCH = NODE_W + COUPLE_GAP;
-/** Every card shares one compact height so all levels style identically. */
-export const CARD_H_SHORT = 68;
-export const CARD_H_TALL = 68;
+/** Pitch from one generation row to the next. */
+export const GENERATION_PITCH = NODE_H + Y_GAP;
 
 /**
- * Wrap a display name the same way cards render it: one line, ≤26 chars,
- * ellipsis on overflow. Single-line keeps every row — and every level —
- * exactly the same height.
+ * Wrap a display name inside the text column (`cardW - textX - textPad`).
+ * At most two lines. A third line becomes an ellipsis on line two.
  */
 export function wrapDisplayName(name: string): string[] {
   const words = String(name || "").split(/\s+/).filter(Boolean);
   if (words.length === 0) return ["?"];
-  if (words.join(" ").length <= 26) return [words.join(" ")];
-  let first = "";
-  for (const word of words) {
-    const next = first ? `${first} ${word}` : word;
-    if (next.length <= 25) first = next;
-    else break;
+  const lines: string[] = [];
+  let index = 0;
+  while (index < words.length && lines.length < 2) {
+    let end = index + 1;
+    while (end < words.length && words.slice(index, end + 1).join(" ").length <= NAME_LINE_CHARS) end++;
+    let line = words.slice(index, end).join(" ");
+    if (line.length > NAME_LINE_CHARS) line = `${line.slice(0, NAME_LINE_CHARS - 1)}…`;
+    const moreAfter = end < words.length;
+    if (lines.length === 1 && moreAfter && !line.endsWith("…")) {
+      line = `${line.slice(0, NAME_LINE_CHARS - 1)}…`;
+    }
+    lines.push(line);
+    index = end;
   }
-  if (!first) return [`${words[0]!.slice(0, 25)}…`];
-  return [`${first}…`];
-}
-
-/** Card height from content: name-only cards stay compact. */
-export function cardHeightFor(displayName: string): number {
-  return wrapDisplayName(displayName).length > 1 ? CARD_H_TALL : CARD_H_SHORT;
+  return lines;
 }
 const MAX_COLUMNS = 4;
 export const MAX_VISIBLE_PEOPLE = 500;
@@ -212,8 +216,8 @@ function buildBuses(
     if (partners.length === 0 || kids.length === 0) continue;
     // Each parent card gets a vertical drop from its own bottom-center to
     // the bus — every wire physically touches a card, nothing floats.
-    // The bus bar joins them and distributes to children with rounded
-    // corners (MyHeritage construction).
+    // The bus bar joins them and distributes to children. Corners are
+    // square. The client draws the strokes.
     const legs = partners.map((p) => at.get(p)!.x + NODE_W / 2);
     const top = Math.max(...partners.map((p) => at.get(p)!.y + (at.get(p)!.h ?? NODE_H) / 2));
     const pbot = Math.max(...partners.map((p) => at.get(p)!.y + (at.get(p)!.h ?? NODE_H)));
@@ -277,6 +281,7 @@ function layoutFamilyView(
   expandedAncestors: ReadonlySet<string>,
   minimizedAncestorIds: ReadonlySet<string>,
   showSiblings: boolean,
+  showCousins: boolean,
   siblingPersonIds: ReadonlySet<string>,
   showYears: boolean,
   showPhotos: boolean,
@@ -290,6 +295,7 @@ function layoutFamilyView(
   const truncated = new Set<string>();
   const visited = new Set<string>([rootId]);
   const siblingAdded = new Set<string>();
+  const cappedUnder = new Set<string>();
   const cap = (id: string, g: number): boolean => {
     if (visited.has(id)) return false;
     if (visited.size >= MAX_VISIBLE_PEOPLE) {
@@ -313,7 +319,10 @@ function layoutFamilyView(
       included.add(f.id);
       for (const q of f.partners) if (cap(q, g)) descStack.push(q);
       if (g >= maxDepth || collapsed.has(f.id)) continue;
-      for (const c of f.children) if (cap(c, g + 1)) descStack.push(c);
+      for (const c of f.children) {
+        if (cap(c, g + 1)) descStack.push(c);
+        else if (truncated.has(c)) cappedUnder.add(pid);
+      }
     }
   }
   const siblingAnchor = new Map<string, string>();
@@ -384,10 +393,11 @@ function layoutFamilyView(
   for (const sid of siblingPersonIds) {
     if (gen.has(sid)) addSiblingsOf(sid);
   }
-  // Collateral descendants (cousins, nephews/nieces and their families):
-  // straight down from every shown sibling/aunt/uncle, mirroring the root
-  // descendant pass. Never upward, so no in-law pedigree leaks in.
-  const colStack = [...siblingAdded];
+  // Descendants of the focus person's siblings (the "Show cousins" set),
+  // plus descendants of aunts and uncles. Cousins off keeps the siblings
+  // and drops only the focus-sibling descendant line. Never upward, so
+  // no in-law pedigree leaks in.
+  const colStack = [...siblingAdded].filter((id) => showCousins || siblingAnchor.get(id) !== rootId);
   const doneCol = new Set<string>();
   while (colStack.length > 0) {
     const pid = colStack.pop()!;
@@ -399,7 +409,10 @@ function layoutFamilyView(
       included.add(f.id);
       for (const q of f.partners) if (cap(q, g)) colStack.push(q);
       if (g >= maxDepth || collapsed.has(f.id)) continue;
-      for (const c of f.children) if (cap(c, g + 1)) colStack.push(c);
+      for (const c of f.children) {
+        if (cap(c, g + 1)) colStack.push(c);
+        else if (truncated.has(c)) cappedUnder.add(pid);
+      }
     }
   }
 
@@ -700,7 +713,10 @@ function layoutFamilyView(
   // The years/status line decides between roomy and ultra-compact; photos
   // fit inside the roomy height, so every level styles identically.
   const rowH = new Map<number, number>();
-  const uniformH = !showYears && !showPhotos ? 48 : CARD_H_SHORT;
+  // One measured card height. Year and photo settings change the drawing, not the pitch.
+  const uniformH = NODE_H;
+  void showYears;
+  void showPhotos;
   for (const [id, g] of gen) {
     if (!positioned.has(id)) continue;
     rowH.set(g, Math.max(rowH.get(g) ?? 0, uniformH));
@@ -874,6 +890,28 @@ function layoutFamilyView(
       hiddenAncestors: 0,
     }));
   }
+  for (const parentId of cappedUnder) {
+    const n = nodes.find((node) => node.personId === parentId);
+    if (!n) continue;
+    const already = placeholders.some(
+      (p) => p.direction === "below" && (p.anchorId === parentId || p.branchFamilyIds.some((id) => n.branchFamilyIds.includes(id))),
+    );
+    if (already) continue;
+    const hidden = countHiddenDescendants(parentId);
+    if (hidden <= 0) continue;
+    placeholders.push(placeholderNode({
+      direction: "below",
+      anchorId: parentId,
+      x: n.x + NODE_W / 2 - PH_W / 2,
+      y: n.y + n.h + PH_GAP,
+      h: PH_H,
+      generation: n.generation + 0.5,
+      atDepthLimit: true,
+      label: nameOf(parentId),
+      hiddenDescendants: hidden,
+      hiddenAncestors: 0,
+    }));
+  }
   for (const n of nodes) {
     if (n.hiddenAncestorCount > 0) {
       placeholders.push(placeholderNode({
@@ -921,6 +959,8 @@ export function familyLayout(
     expandedAncestorIds?: ReadonlySet<string>;
     minimizedAncestorIds?: ReadonlySet<string>;
     showSiblings?: boolean;
+    /** Descendants of the focus person's siblings. Default on. */
+    showCousins?: boolean;
     siblingPersonIds?: ReadonlySet<string>;
     showYears?: boolean;
     showPhotos?: boolean;
@@ -961,6 +1001,7 @@ export function familyLayout(
       opts.expandedAncestorIds ?? new Set<string>(),
       opts.minimizedAncestorIds ?? new Set<string>(),
       opts.showSiblings ?? false,
+      opts.showCousins ?? true,
       opts.siblingPersonIds ?? new Set<string>(),
       opts.showYears ?? true,
       opts.showPhotos ?? false,

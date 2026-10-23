@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { addChild, addFact, addParent, addPartner, createFamily, createPerson } from "../src/domain/tree";
 import type { Tree } from "../src/domain/types";
 import { emptyTree } from "../src/domain/tree";
-import { familyLayout, wrapDisplayName, type LayoutNode } from "../src/views/family";
+import { NAME_LINE_CHARS } from "../src/views/chartTokens";
+import { COUPLE_PITCH, familyLayout, NODE_H, NODE_W, X_GAP, wrapDisplayName, type LayoutNode } from "../src/views/family";
 import { outlineFromLayout } from "../src/views/outline";
 import { listPeople } from "../src/views/list";
 
@@ -78,7 +79,7 @@ describe("family layout", () => {
     expect(layout.view).toBe("fan");
     expect(byId.has(kid)).toBe(false);
     expect(byId.get(gp)!.y).toBeLessThan(byId.get(parent)!.y);
-    expect(layout.width).toBeGreaterThan(232);
+    expect(layout.width).toBeGreaterThan(NODE_W);
     expect(layout.nodes.every((node) => !node.hasDescendants)).toBe(true);
   });
 
@@ -165,11 +166,11 @@ describe("family layout", () => {
     // Partners share a row and sit side by side.
     expect(A.generation).toBe(0);
     expect(B.generation).toBe(0);
-    expect(Math.abs(A.x - B.x)).toBe(232 + 32);
+    expect(Math.abs(A.x - B.x)).toBe(COUPLE_PITCH);
     // The couple is centered over its children (bus anchor midpoint).
     expect((A.x + B.x) / 2).toBeCloseTo((C1.x + C2.x) / 2, 5);
     // Next generation couples the same way; grandchild under their midpoint.
-    expect(Math.abs(C1.x - S.x)).toBe(232 + 32);
+    expect(Math.abs(C1.x - S.x)).toBe(COUPLE_PITCH);
     expect(G.x).toBeCloseTo((C1.x + S.x) / 2, 5);
     expect(G.generation).toBe(2);
   });
@@ -199,8 +200,8 @@ describe("family layout", () => {
     const layout = familyLayout(tree, root.id, { depth: 3 });
     const at = new Map(layout.nodes.map((n) => [n.personId, n]));
     // Both grandparent couples adjacent despite each having parents above.
-    expect(Math.abs(at.get(gf1.id)!.x - at.get(gm1.id)!.x)).toBe(232 + 32);
-    expect(Math.abs(at.get(gf2.id)!.x - at.get(gm2.id)!.x)).toBe(232 + 32);
+    expect(Math.abs(at.get(gf1.id)!.x - at.get(gm1.id)!.x)).toBe(COUPLE_PITCH);
+    expect(Math.abs(at.get(gf2.id)!.x - at.get(gm2.id)!.x)).toBe(COUPLE_PITCH);
     // No card overlaps anywhere.
     const rows = new Map<number, { x: number }[]>();
     for (const n of layout.nodes) {
@@ -211,7 +212,7 @@ describe("family layout", () => {
     for (const ns of rows.values()) {
       ns.sort((a, b) => a.x - b.x);
       for (let i = 1; i < ns.length; i++) {
-        expect(ns[i]!.x).toBeGreaterThanOrEqual(ns[i - 1]!.x + 232);
+        expect(ns[i]!.x).toBeGreaterThanOrEqual(ns[i - 1]!.x + NODE_W);
       }
     }
   });
@@ -233,13 +234,13 @@ describe("family layout", () => {
     const A = layout.nodes.find((n) => n.personId === withC1.updatedParent.id)!;
     const B = layout.nodes.find((n) => n.personId === couple.updatedB.id)!;
     const C1 = layout.nodes.find((n) => n.personId === withC1.updatedChild!.id)!;
-    expect(bus.x).toBeCloseTo((A.x + B.x + 232) / 2, 5);
-    expect(bus.kids).toEqual([C1.x + 232 / 2]);
-    expect(bus.top).toBe(A.y + 34);
+    expect(bus.x).toBeCloseTo((A.x + B.x + NODE_W) / 2, 5);
+    expect(bus.kids).toEqual([C1.x + NODE_W / 2]);
+    expect(bus.top).toBe(A.y + NODE_H / 2);
     expect(bus.bus).toBe((bus.top + bus.kidTop) / 2);
     expect(bus.kidTop).toBe(C1.y);
     // Each parent card's center gets its own drop — every wire touches a card.
-    expect(bus.legs).toEqual([A.x + 232 / 2, B.x + 232 / 2]);
+    expect(bus.legs).toEqual([A.x + NODE_W / 2, B.x + NODE_W / 2]);
     expect(bus.pbot).toBe(A.y + A.h);
   });
 
@@ -269,7 +270,7 @@ describe("family layout", () => {
     };
     const layout = familyLayout(tree, r.id, { depth: 3, showSiblings: true });
     const at = new Map(layout.nodes.map((n) => [n.personId, n]));
-    const cx = (id: string): number => at.get(id)!.x + 232 / 2;
+    const cx = (id: string): number => at.get(id)!.x + NODE_W / 2;
     const busOf = (kidId: string): number =>
       layout.buses.find((b) => b.kids.some((k) => Math.abs(k - cx(kidId)) < 0.01))!.bus;
     // Same generation gap, overlapping spans: separate lanes.
@@ -290,26 +291,24 @@ describe("family layout", () => {
     const layout = familyLayout(tree, short.id, { depth: 1 });
     const heights = new Map(layout.nodes.map((n) => [n.personId, n.h]));
     // Every level shares one compact height so styling stays identical.
-    expect(heights.get(short.id)).toBe(68);
-    expect(heights.get(tall.id)).toBe(68);
+    expect(heights.get(short.id)).toBe(NODE_H);
+    expect(heights.get(tall.id)).toBe(NODE_H);
     expect(new Set(layout.nodes.map((n) => n.h)).size).toBe(1);
-    // A name-only card on its own row stays compact.
     const solo = familyLayout({ ...emptyTree(), persons: [short], families: [] }, short.id, {});
-    expect(solo.nodes[0]!.h).toBe(68);
+    expect(solo.nodes[0]!.h).toBe(NODE_H);
   });
 
-  test("name-only mode compacts cards further", () => {
+  test("year and photo settings keep one card height", () => {
     const a = createPerson({ given: "Anna" });
     const b = createPerson({ given: "Bo" });
     const couple = addPartner({ a, b });
     const tree = { ...emptyTree(), persons: [couple.updatedA, couple.updatedB], families: [couple.family] };
     const roomy = familyLayout(tree, a.id, { depth: 1 });
-    expect(roomy.nodes.map((n) => n.h)).toEqual([68, 68]);
+    expect(roomy.nodes.map((n) => n.h)).toEqual([NODE_H, NODE_H]);
     const compact = familyLayout(tree, a.id, { depth: 1, showYears: false, showPhotos: false });
-    expect(compact.nodes.map((n) => n.h)).toEqual([48, 48]);
-    // Photos on their own keep room for the avatar.
+    expect(compact.nodes.map((n) => n.h)).toEqual([NODE_H, NODE_H]);
     const withPhotos = familyLayout(tree, a.id, { depth: 1, showYears: false, showPhotos: true });
-    expect(withPhotos.nodes.map((n) => n.h)).toEqual([68, 68]);
+    expect(withPhotos.nodes.map((n) => n.h)).toEqual([NODE_H, NODE_H]);
   });
 
   test("the focused person is flagged and names wrap server-side", () => {
@@ -319,16 +318,16 @@ describe("family layout", () => {
     expect(layout.nodes.find((n) => n.personId === kid)!.isFocus).toBe(false);
   });
 
-  test("wrapDisplayName fits one line with ellipsis on overflow", () => {
+  test("wrapDisplayName fits the text column on two lines", () => {
     expect(wrapDisplayName("Ada Lovelace")).toEqual(["Ada Lovelace"]);
-    expect(wrapDisplayName("Dalliyanayya Ratuviha")).toEqual(["Dalliyanayya Ratuviha"]);
-    expect(wrapDisplayName("Bartholomew Quincy Adams Junior")).toEqual([
-      "Bartholomew Quincy Adams…",
-    ]);
+    expect(wrapDisplayName("Dalliyanayya Ratuviha")).toEqual(["Dalliyanayya", "Ratuviha"]);
+    expect(wrapDisplayName("Bartholomew Quincy Adams Junior")).toEqual(["Bartholomew", "Quincy Adams…"]);
     expect(wrapDisplayName("")).toEqual(["?"]);
-    expect(wrapDisplayName("Supercalifragilisticexpialidocious X")).toEqual([
-      "Supercalifragilisticexpia…",
-    ]);
+    expect(wrapDisplayName("Supercalifragilisticexpialidocious X")[0]!.endsWith("…")).toBe(true);
+    expect(wrapDisplayName("Supercalifragilisticexpialidocious X")).toHaveLength(2);
+    for (const line of wrapDisplayName("Bartholomew Quincy Adams Junior")) {
+      expect(line.length).toBeLessThanOrEqual(NAME_LINE_CHARS);
+    }
   });
 
   test("minimizing one ancestor line hides only its upstream", () => {
@@ -364,7 +363,7 @@ describe("family layout", () => {
     for (const ns of rows.values()) {
       ns.sort((a, b) => a.x - b.x);
       for (let i = 1; i < ns.length; i++) {
-        expect(ns[i]!.x).toBeGreaterThanOrEqual(ns[i - 1]!.x + 232);
+        expect(ns[i]!.x).toBeGreaterThanOrEqual(ns[i - 1]!.x + NODE_W);
       }
     }
   });
@@ -431,7 +430,7 @@ describe("family layout", () => {
     const at = new Map(layout.nodes.map((n) => [n.personId, n]));
     const gapSameGroup = at.get(sibA.id)!.x - at.get(root.id)!.x;
     const gapNewGroup = at.get(sibB.id)!.x - at.get(sibA.id)!.x;
-    expect(gapSameGroup).toBe(232 + 56);
+    expect(gapSameGroup).toBe(NODE_W + X_GAP);
     expect(gapNewGroup).toBeGreaterThan(gapSameGroup);
   });
 
@@ -504,8 +503,8 @@ describe("family layout", () => {
     const at = new Map(layout.nodes.map((n) => [n.personId, n]));
     // Spouse sits at couple pitch; sibling at the wider sibling pitch —
     // no cousin branch wedged between blood siblings.
-    expect(at.get(spouse.id)!.x - at.get(root.id)!.x).toBe(232 + 32);
-    expect(at.get(sib.id)!.x - at.get(spouse.id)!.x).toBe(232 + 56);
+    expect(at.get(spouse.id)!.x - at.get(root.id)!.x).toBe(COUPLE_PITCH);
+    expect(at.get(sib.id)!.x - at.get(spouse.id)!.x).toBe(NODE_W + X_GAP);
     // The cousin branch sits beyond the sibling.
     expect(at.get(cousin.id)!.x).toBeGreaterThan(at.get(sib.id)!.x);
   });
@@ -565,12 +564,12 @@ describe("family layout", () => {
     expect(at.has(cousin.id)).toBe(true);
     expect(at.has(uncleInLaw.id)).toBe(true);
     // Aunt couple adjacent at couple pitch, father left.
-    expect(Math.abs(at.get(aunt.id)!.x - at.get(uncleInLaw.id)!.x)).toBe(232 + 32);
+    expect(Math.abs(at.get(aunt.id)!.x - at.get(uncleInLaw.id)!.x)).toBe(COUPLE_PITCH);
     expect(at.get(uncleInLaw.id)!.x).toBeLessThan(at.get(aunt.id)!.x);
     // Cousin centered under the aunt couple's midpoint.
     expect(cousin).toBeDefined();
-    const mid = (at.get(aunt.id)!.x + at.get(uncleInLaw.id)!.x + 232) / 2;
-    expect(at.get(cousin.id)!.x + 232 / 2).toBeCloseTo(mid, 5);
+    const mid = (at.get(aunt.id)!.x + at.get(uncleInLaw.id)!.x + NODE_W) / 2;
+    expect(at.get(cousin.id)!.x + NODE_W / 2).toBeCloseTo(mid, 5);
     // No overlaps anywhere.
     const rows = new Map<number, { x: number }[]>();
     for (const n of layout.nodes) {
@@ -581,7 +580,7 @@ describe("family layout", () => {
     for (const ns of rows.values()) {
       ns.sort((a, b) => a.x - b.x);
       for (let i = 1; i < ns.length; i++) {
-        expect(ns[i]!.x).toBeGreaterThanOrEqual(ns[i - 1]!.x + 232);
+        expect(ns[i]!.x).toBeGreaterThanOrEqual(ns[i - 1]!.x + NODE_W);
       }
     }
   });
@@ -592,8 +591,10 @@ describe("family layout", () => {
     const family = { ...createFamily({ partners: [root.id] }), children: children.map((child) => child.id) };
     const tree = { ...emptyTree(), persons: [root, ...children], families: [family] };
     const layout = familyLayout(tree, root.id, { depth: 1 });
-    expect(layout.nodes).toHaveLength(500);
+    const people = layout.nodes.filter((n) => n.kind !== "placeholder");
+    expect(people).toHaveLength(500);
     expect(layout.truncatedCount).toBe(101);
+    expect(layout.nodes.find((n) => n.kind === "placeholder")?.hiddenDescendants).toBe(101);
     // One row per generation, no wrapping: wide rows scroll and pan.
     expect(layout.width).toBeGreaterThan(1036);
   });
@@ -675,7 +676,7 @@ describe("placeholder nodes", () => {
     }
   });
 
-  test("placeholders carry expand data, never join person rows, and stay out of the cap", () => {
+  test("placeholders carry expand data, never join person rows, and report a full cap", () => {
     const { tree, parent, kid } = demoTree();
     const fam = tree.families.find((f) => f.children.includes(kid))!;
     const layout = familyLayout(tree, parent, { depth: 2, collapsedFamilyIds: new Set([fam.id]) });
@@ -686,12 +687,16 @@ describe("placeholder nodes", () => {
       rows.set(n.generation, list);
     }
     expect([...rows.keys()].every((g) => Number.isInteger(g) ? rows.get(g)!.every((n) => n.kind !== "placeholder") : true)).toBe(true);
-    // The 500-person cap is about people: placeholders never count or appear there.
+    // The 500-person cap counts people. A placeholder reports the people the cap hid.
     const root = createPerson({ given: "Root" });
     const children = Array.from({ length: 600 }, (_, i) => createPerson({ given: `Child ${i}` }));
     const bigFam = { ...createFamily({ partners: [root.id] }), children: children.map((c) => c.id) };
     const big = familyLayout({ ...emptyTree(), persons: [root, ...children], families: [bigFam] }, root.id, { depth: 1 });
-    expect(phOf(big.nodes)).toHaveLength(0);
+    expect(big.nodes.filter((n) => n.kind !== "placeholder")).toHaveLength(500);
+    const capped = phOf(big.nodes);
+    expect(capped).toHaveLength(1);
+    expect(capped[0]!.hiddenDescendants).toBe(101);
+    expect(Number.isInteger(capped[0]!.generation)).toBe(false);
   });
 });
 

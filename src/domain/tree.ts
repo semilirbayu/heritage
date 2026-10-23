@@ -421,6 +421,75 @@ export function kinOf(tree: { persons: Person[]; families: Family[] }, person: P
   };
 }
 
+/** Siblings across every family that names the person as a child. */
+export function siblingsOf(
+  tree: { persons: Person[]; families: Family[] },
+  person: Person,
+): Person[] {
+  const byId = new Map(tree.persons.map((p) => [p.id, p]));
+  const seen = new Set<string>();
+  const out: Person[] = [];
+  for (const link of person.famc) {
+    const family = tree.families.find((f) => f.id === link.familyId);
+    for (const id of family?.children ?? []) {
+      if (id === person.id || seen.has(id)) continue;
+      const sibling = byId.get(id);
+      if (sibling) {
+        seen.add(id);
+        out.push(sibling);
+      }
+    }
+  }
+  return out;
+}
+
+function sexWord(sex: string | undefined, male: string, female: string, neutral: string): string {
+  if (sex === "M") return male;
+  if (sex === "F") return female;
+  return neutral;
+}
+
+/**
+ * How `personId` relates to the chart root. Read-only: it walks the loaded
+ * graph. Long, in-law, and unknown paths return "Relative".
+ */
+export function relationLabel(
+  tree: { persons: Person[]; families: Family[] },
+  rootId: string,
+  personId: string,
+): string {
+  const byId = new Map(tree.persons.map((p) => [p.id, p]));
+  const root = byId.get(rootId);
+  const person = byId.get(personId);
+  if (!root || !person) return "Relative";
+  if (root.id === person.id) return "Main person";
+
+  const kin = kinOf(tree, root);
+  const has = (list: Person[], id: string): boolean => list.some((p) => p.id === id);
+  if (has(kin.partners, person.id)) return sexWord(person.sex, "Husband", "Wife", "Partner");
+  if (has(kin.parents, person.id)) return sexWord(person.sex, "Father", "Mother", "Parent");
+  if (has(kin.children, person.id)) return sexWord(person.sex, "Son", "Daughter", "Child");
+
+  const siblings = siblingsOf(tree, root);
+  if (has(siblings, person.id)) return sexWord(person.sex, "Brother", "Sister", "Sibling");
+  if (kin.parents.some((p) => has(kinOf(tree, p).parents, person.id))) {
+    return sexWord(person.sex, "Grandfather", "Grandmother", "Grandparent");
+  }
+  if (kin.children.some((c) => has(kinOf(tree, c).children, person.id))) {
+    return sexWord(person.sex, "Grandson", "Granddaughter", "Grandchild");
+  }
+  if (kin.parents.some((p) => has(siblingsOf(tree, p), person.id))) {
+    return sexWord(person.sex, "Uncle", "Aunt", "Aunt or uncle");
+  }
+  if (siblings.some((s) => has(kinOf(tree, s).children, person.id))) {
+    return sexWord(person.sex, "Nephew", "Niece", "Nephew or niece");
+  }
+  if (kin.parents.some((p) => siblingsOf(tree, p).some((a) => has(kinOf(tree, a).children, person.id)))) {
+    return "Cousin";
+  }
+  return "Relative";
+}
+
 export function addFact(
   person: Person,
   input: {

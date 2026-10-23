@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  addChild,
   addParent,
   addPartner,
   addSibling,
@@ -8,6 +9,7 @@ import {
   detachChild,
   detachPartner,
   kinOf,
+  relationLabel,
   setDivorce,
   setMarriage,
 } from "../src/domain/tree";
@@ -191,5 +193,99 @@ describe("typed relationships", () => {
     expect(kin.children).toEqual([]);
     const kinParent = kinOf(tree, r2.updatedParent);
     expect(kinParent.children.map((p) => p.id)).toEqual([r2.updatedChild.id]);
+  });
+});
+
+describe("relation label", () => {
+  test("names the common relations from the chart root", () => {
+    const gp = addPartner({
+      a: createPerson({ given: "Grandpa", sex: "M" }),
+      b: createPerson({ given: "Grandma", sex: "F" }),
+    });
+    const parent = createPerson({ given: "Parent", sex: "M" });
+    const withParent = addChild({
+      family: gp.family,
+      childId: parent.id,
+      parent: gp.updatedA,
+      child: parent,
+    });
+    const aunt = createPerson({ given: "Aunt", sex: "F" });
+    const withAunt = addChild({
+      family: withParent.family,
+      childId: aunt.id,
+      parent: withParent.updatedParent,
+      child: aunt,
+    });
+    const root = createPerson({ given: "Root", sex: "F" });
+    const withRoot = addParent({ child: root, parent: withParent.updatedChild! });
+    const sibling = createPerson({ given: "Brother", sex: "M" });
+    const withSibling = addSibling({
+      family: withRoot.family,
+      siblingId: sibling.id,
+      sibling,
+    });
+    const spouse = createPerson({ given: "Husband", sex: "M" });
+    const withSpouse = addPartner({ a: withRoot.updatedChild, b: spouse });
+    const child = createPerson({ given: "Daughter", sex: "F" });
+    const withChild = addChild({
+      family: withSpouse.family,
+      childId: child.id,
+      parent: withSpouse.updatedA,
+      child,
+    });
+    const grandchild = createPerson({ given: "Grandkid", sex: "F" });
+    const withGrandchild = addParent({ child: grandchild, parent: withChild.updatedChild! });
+    const niece = createPerson({ given: "Niece", sex: "F" });
+    const withNiece = addParent({ child: niece, parent: withSibling.updatedSibling! });
+    const cousin = createPerson({ given: "Cousin", sex: "M" });
+    const withCousin = addParent({ child: cousin, parent: withAunt.updatedChild! });
+    const tree = {
+      ...emptyTree(),
+      persons: [
+        withAunt.updatedParent,
+        gp.updatedB,
+        withRoot.updatedParent,
+        withCousin.updatedParent,
+        withChild.updatedParent,
+        withNiece.updatedParent,
+        withSpouse.updatedB,
+        withGrandchild.updatedParent,
+        withGrandchild.updatedChild,
+        withNiece.updatedChild,
+        withCousin.updatedChild,
+      ],
+      families: [
+        withAunt.family,
+        withSibling.family,
+        withChild.family,
+        withGrandchild.family,
+        withNiece.family,
+        withCousin.family,
+      ],
+    };
+    const rootId = withChild.updatedParent.id;
+    expect(relationLabel(tree, rootId, rootId)).toBe("Main person");
+    expect(relationLabel(tree, rootId, withSpouse.updatedB.id)).toBe("Husband");
+    expect(relationLabel(tree, rootId, withRoot.updatedParent.id)).toBe("Father");
+    expect(relationLabel(tree, rootId, withChild.updatedChild!.id)).toBe("Daughter");
+    expect(relationLabel(tree, rootId, withSibling.updatedSibling!.id)).toBe("Brother");
+    expect(relationLabel(tree, rootId, withAunt.updatedParent.id)).toBe("Grandfather");
+    expect(relationLabel(tree, rootId, withGrandchild.updatedChild.id)).toBe("Granddaughter");
+    expect(relationLabel(tree, rootId, withAunt.updatedChild!.id)).toBe("Aunt");
+    expect(relationLabel(tree, rootId, withNiece.updatedChild.id)).toBe("Niece");
+    expect(relationLabel(tree, rootId, withCousin.updatedChild.id)).toBe("Cousin");
+    expect(relationLabel(tree, rootId, "ghost")).toBe("Relative");  });
+
+  test("unknown sex reads neutral, and a missing root is safe", () => {
+    const parent = createPerson({ given: "Parent" });
+    const child = createPerson({ given: "Child" });
+    const linked = addParent({ child, parent });
+    const tree = {
+      ...emptyTree(),
+      persons: [linked.updatedParent, linked.updatedChild],
+      families: [linked.family],
+    };
+    expect(relationLabel(tree, linked.updatedChild.id, linked.updatedParent.id)).toBe("Parent");
+    expect(relationLabel(tree, "ghost", linked.updatedChild.id)).toBe("Relative");
   });
 });
